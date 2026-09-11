@@ -155,6 +155,8 @@ docker compose cp dashboard:/data/backup-20260907.sqlite3 ./backups/
 
 上表路径均在 `/api/v1` 下。报价包含 `at/fetched_at/source/stale/quality/status`；`quality` 为 `valid/stale/unknown`。金额在 API 中为元，涨跌幅和比例为小数。API 文档端点未对外启用，接口定义见 `app/dashboard/api.py`。
 
+「我的 ETF」列表及详情的报价额外返回 `display.status/label/warning`，按已核验交易日历显示盘中、午间休市、已收盘或最近交易日状态。休市报价须属于期望交易日，并更新至对应时段末（90 秒容差）；旧交易日、过早的报价、异常价格或未知日历仍提示待更新／待核验。原始 `stale/quality` 和交易有效期不变。界面「行情源时间」保留来源返回的 `at`，悬停可查看采集时间 `fetched_at`；盘后后台每 15 分钟检查行情，来源时间戳可能继续变化，不表示该时刻有成交。
+
 ETF 列表及详情包含 `focus_group/focus_label/amount20/turnover20/turnover_reason/representative/representative_symbol/liquidity_rank/focus_reason`。`turnover20` 使用比例值（0.01 = 1%），缺失为 null，`sort=turnover20` 降序且缺失排最后。列表 `focus` 提供 `minimum_amount/minimum_turnover` 两项门槛及分组、代表、换手率不足和待齐数量。代表在所选候选范围内满足两项门槛后确定，再应用搜索和分页，搜索非代表不会让它成为临时代表。`PATCH /config` 可保存两项下限，0 分别表示不限制。
 
 ### 买卖观察

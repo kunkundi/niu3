@@ -59,6 +59,18 @@ const lastQuoteAt = computed(() =>
     .sort()
     .at(-1),
 )
+function quoteDisplay(quote) {
+  if (!quote) return { label: '暂无行情', warning: true }
+  return (
+    quote.display || {
+      label: quote.stale ? '已过期 · 待更新' : quote.quality === 'unknown' ? '行情待核验' : '',
+      warning: quote.stale || quote.quality === 'unknown',
+    }
+  )
+}
+function quoteTimeTitle(quote) {
+  return `行情源时间：${dateTime(quote?.at)}；采集时间：${dateTime(quote?.fetched_at)}。来源时间戳不代表最后成交时间。`
+}
 function selectSort(key) {
   sort.value = sort.value === key ? `${key}_asc` : key
 }
@@ -377,9 +389,9 @@ async function removeEtf(item) {
               <small
                 >{{ displayCode(item.symbol) }}
                 <span
-                  v-if="!item.quote || item.quote.stale || item.quote.quality === 'unknown'"
-                  class="amberText"
-                  >· {{ !item.quote ? '暂无行情' : item.quote.stale ? '已过期' : '待核验' }}</span
+                  v-if="quoteDisplay(item.quote).label"
+                  :class="{ amberText: quoteDisplay(item.quote).warning }"
+                  >· {{ quoteDisplay(item.quote).label }}</span
                 ></small
               >
             </span>
@@ -428,7 +440,7 @@ async function removeEtf(item) {
             </th>
             <th>分时走势</th>
             <th>投资方向</th>
-            <th>行情时间</th>
+            <th title="行情源报告的时间戳，不代表最后成交时间">行情源时间</th>
             <th>管理</th>
           </tr>
         </thead>
@@ -496,24 +508,16 @@ async function removeEtf(item) {
             >
               <span class="focus-label">{{ item.focus_label }}</span>
             </td>
-            <td :title="`行情时间：${dateTime(item.quote?.at)}`">
+            <td :title="quoteTimeTitle(item.quote)">
               <span class="quote-time">{{
                 item.quote?.at
                   ? `${item.quote.at.slice(5, 10)} ${item.quote.at.slice(11, 16)}`
                   : item.performance?.as_of || '—'
               }}</span>
               <small
-                v-if="!item.quote || item.quote.stale || item.quote.quality === 'unknown'"
-                :class="{ amberText: item.quote?.stale }"
-                >{{
-                  !item.quote
-                    ? '暂无行情'
-                    : item.quote.stale
-                      ? '已过期 · 待更新'
-                      : item.quote.quality === 'unknown'
-                        ? '待核验'
-                        : '有效行情'
-                }}</small
+                v-if="quoteDisplay(item.quote).label"
+                :class="{ amberText: quoteDisplay(item.quote).warning }"
+                >{{ quoteDisplay(item.quote).label }}</small
               >
             </td>
             <td>
@@ -585,7 +589,12 @@ async function removeEtf(item) {
         ><span class="chip neutral">{{
           detail.watched ? '手动添加' : detail.history_only ? '历史委托' : '持仓跟踪'
         }}</span
-        ><span class="chip amber" v-if="detail.quote?.stale">行情已陈旧</span>
+        ><span
+          v-if="quoteDisplay(detail.quote).label"
+          class="chip"
+          :class="quoteDisplay(detail.quote).warning ? 'amber' : 'neutral'"
+          >{{ quoteDisplay(detail.quote).label }}</span
+        >
       </div>
       <div v-if="chartMode === 'intraday'" class="quote-facts">
         <div>
@@ -620,9 +629,9 @@ async function removeEtf(item) {
         <div>
           <span>卖一价</span><strong>{{ detail.quote?.ask > 0 ? money(detail.quote.ask, 3) : '—' }}</strong>
         </div>
-        <div>
-          <span>行情时间</span
-          ><strong class="quote-time" :class="{ amberText: detail.quote?.stale }">{{
+        <div :title="quoteTimeTitle(detail.quote)">
+          <span>行情源时间</span
+          ><strong class="quote-time" :class="{ amberText: quoteDisplay(detail.quote).warning }">{{
             detail.quote?.at ? `${detail.quote.at.slice(5, 10)} ${detail.quote.at.slice(11, 19)}` : '暂无行情'
           }}</strong>
         </div>

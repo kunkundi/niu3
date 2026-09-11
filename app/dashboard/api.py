@@ -49,6 +49,7 @@ from app.market_data.index_chart import IndexChartService
 from app.market_data.providers import PublicProvider, DataError
 from app.market_data.etf_search import local_suggestions, search_key
 from app.dashboard.market_performance import calculate_performance, load_histories
+from app.dashboard.quote_display import quote_display_state
 from app.dashboard.post_close import post_close_payload, post_close_window
 from app.dashboard.live_candle import live_candle_payload
 from app.dashboard.trade_positions import annotate_trade_positions
@@ -74,7 +75,7 @@ class PasswordChangeInput(BaseModel):
     confirm_password: SecretStr = Field(min_length=1)
 
 
-def quote_payload(quote, now):
+def quote_payload(quote, now, calendar=None):
     data = quote.to_dict()
     for key in ("last", "previous_close", "bid", "ask", "amount", "upper", "lower", "open", "high", "low"):
         data[key] = yuan(data[key])
@@ -83,6 +84,8 @@ def quote_payload(quote, now):
     data["quality"] = (
         "stale" if data["stale"] else "valid" if quote.last > 0 and quote.status == "trading" else "unknown"
     )
+    if calendar is not None:
+        data["display"] = quote_display_state(quote, calendar, now)
     return data
 
 
@@ -388,7 +391,7 @@ def create_app(
                 if recent_triggered and not triggered:
                     continue
                 latest = latest_quote(conn, instrument.symbol)
-                quote = quote_payload(latest[1], now) if latest else None
+                quote = quote_payload(latest[1], now, calendar) if latest else None
                 rows.append(
                     {
                         **instrument.to_dict(),
@@ -518,7 +521,7 @@ def create_app(
                 **focus_snapshot(conn, complete_day)["items"].get(symbol, {}),
                 "history_only": history_only,
                 "tradable": instrument.tradable,
-                "quote": quote_payload(latest[1], now) if latest else None,
+                "quote": quote_payload(latest[1], now, calendar) if latest else None,
                 "performance": calculate_performance(
                     latest[1] if latest else None,
                     load_histories(conn, [symbol], complete_day).get(symbol, {}),
