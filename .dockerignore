@@ -1,0 +1,9 @@
+.git
+.venv
+.local-data
+backups
+.env
+**/__pycache__
+web/node_modules
+web/dist
+artifacts

@@ -1,0 +1,258 @@
+/* Treat controls as controls, while keeping ordinary text and form fields copyable. */
+button,
+summary,
+[role='option'],
+label:has(> input:is([type='checkbox'], [type='radio'])),
+.terminal-nav a,
+.brand,
+.text-link,
+.table-name,
+[data-touch-surface] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+button,
+summary,
+[role='option'],
+label:has(> input:is([type='checkbox'], [type='radio'])),
+.terminal-nav a,
+.text-link {
+  touch-action: manipulation;
+}
+.brand img,
+button svg,
+[data-touch-surface] svg {
+  -webkit-user-drag: none;
+}
+@media (any-pointer: coarse) {
+  .chart-heading,
+  .kline-readout,
+  .kline-legend,
+  .kline-x,
+  .pane-legend,
+  .intraday-readout,
+  .structure-levels,
+  .watchlist-columns,
+  .mobile-quote-columns {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
+
+@media (max-width: 700px) {
+  :root {
+    --mobile-control-height: 36px;
+    --mobile-field-height: 40px;
+  }
+  .app-shell :is(.workspace, main, .page-title, .panel-heading > div) {
+    min-width: 0;
+  }
+  .app-shell .page-heading h1 {
+    line-height: 1.4;
+  }
+  .app-shell .status-pill i {
+    flex-shrink: 0;
+  }
+  .app-shell .terminal-header {
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .app-shell summary,
+  .app-shell label:has(> input:is([type='checkbox'], [type='radio'])) {
+    min-height: var(--mobile-field-height);
+    align-content: center;
+  }
+  .app-shell :is(.button, .button.compact, .text-button, .text-link, .tabs button, .pagination button) {
+    min-height: var(--mobile-control-height);
+    min-width: var(--mobile-control-height);
+    line-height: 18px;
+  }
+  .app-shell .button {
+    padding: 7px 12px;
+    font-size: 12px;
+    white-space: normal;
+  }
+  .app-shell .button svg {
+    flex-shrink: 0;
+  }
+  .app-shell .button.compact {
+    padding: 5px 10px;
+    font-size: 12px;
+    border-radius: 3px;
+  }
+  .app-shell .button:not(.compact),
+  .app-shell .icon-button,
+  .app-shell .theme-toggle {
+    border-radius: 3px;
+  }
+  .app-shell .icon-button,
+  .app-shell .theme-toggle {
+    width: var(--mobile-control-height);
+    height: var(--mobile-control-height);
+    min-width: var(--mobile-control-height);
+    min-height: var(--mobile-control-height);
+    flex-shrink: 0;
+    padding: 7px;
+  }
+  .app-shell .icon-button svg {
+    width: 18px;
+    height: 18px;
+  }
+  .app-shell :is(.tabs button, .pagination button) {
+    font-size: 12px;
+    border-radius: 0;
+  }
+  .app-shell .text-button {
+    justify-content: center;
+    padding-inline: 8px;
+  }
+  .app-shell input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  .app-shell select,
+  .app-shell textarea {
+    min-width: 0;
+    min-height: var(--mobile-field-height);
+    font-size: 16px;
+  }
+  .app-shell input:is([type='checkbox'], [type='radio']) {
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    min-height: 18px;
+    flex-shrink: 0;
+  }
+  .app-shell .account-panel .panel-heading {
+    gap: 4px;
+    padding: 6px;
+  }
+  .account-panel .tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 2px;
+    width: 100%;
+  }
+  .app-shell .account-panel .tabs button {
+    padding: 6px 1px;
+    min-width: 0;
+    font-size: 11px;
+  }
+  .market-panel .market-toolbar {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .market-heading-tools {
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .app-shell .market-panel .panel-heading {
+    padding: 6px 10px;
+    flex-wrap: nowrap;
+  }
+  .app-shell .market-toolbar .filter-toggle {
+    min-height: var(--mobile-field-height);
+    padding-inline: 10px;
+    white-space: nowrap;
+  }
+  .app-shell .mobile-quote-columns,
+  .app-shell .mobile-quote-row {
+    grid-template-columns: minmax(0, 1fr) 60px 72px;
+    padding-inline: 12px;
+  }
+  .app-shell .mobile-quote-columns button {
+    min-height: var(--mobile-control-height);
+  }
+  .app-shell .mobile-quote-row {
+    min-height: 60px;
+    padding-block: 8px;
+  }
+  .app-shell :is(.mobile-quote-price, .mobile-quote-change) {
+    font-size: 16px;
+  }
+  .app-shell .pagination {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .app-shell .pagination > div {
+    gap: 6px;
+  }
+  .app-shell .pagination button {
+    padding: 5px 8px;
+    white-space: nowrap;
+  }
+  .app-shell .mobile-holding > .button {
+    width: auto;
+    margin-bottom: 10px;
+  }
+  .app-shell .mobile-holding summary {
+    padding-inline: 0;
+  }
+  .mobile-quotes .mobile-security strong,
+  .mobile-holding .mobile-security strong {
+    line-height: 1.4;
+  }
+  .filter-toggle[aria-expanded='true'] svg {
+    transform: rotate(90deg);
+  }
+  .market-detail .price-tabs {
+    gap: 4px;
+    padding: 3px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg);
+  }
+  .market-detail .price-tabs button {
+    min-height: var(--mobile-control-height);
+    padding: 5px 10px;
+    font-size: 12px;
+    border-radius: 3px;
+  }
+  .app-shell .pa-settings summary,
+  .app-shell .pa-settings label,
+  .app-shell .strategy-level-toggle label {
+    min-height: var(--mobile-field-height);
+    display: flex;
+    align-items: center;
+  }
+  .pa-settings fieldset {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .pa-settings label {
+    min-width: 0;
+    padding: 5px 6px;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+  .pa-settings label input {
+    flex-shrink: 0;
+  }
+  .app-shell .workbench-dialog header {
+    gap: 8px;
+  }
+  .workbench-dialog header h2 {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .workbench-dialog header > button {
+    flex-shrink: 0;
+  }
+  .app-shell .pa-settings {
+    padding: 4px 8px;
+  }
+  .app-shell .pa-settings summary {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+  .app-shell .pa-settings summary span {
+    margin-left: 0;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .app-shell button:active:not(:disabled),
+  .app-shell summary:active,
+  .app-shell [role='option']:active {
+    filter: brightness(0.88);
+  }
+}

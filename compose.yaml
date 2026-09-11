@@ -1,0 +1,48 @@
+name: niuno3
+x-common: &common
+  build: .
+  image: niuno3:local
+  restart: unless-stopped
+  init: true
+  environment: &environment
+    TZ: Asia/Shanghai
+    NIUNO3_DATA_DIR: /data
+    NIUNO3_HOST: 0.0.0.0
+    NIUNO3_PORT: "8789"
+    NIUNO3_ADMIN_PASSWORD: ${NIUNO3_ADMIN_PASSWORD:-}
+  volumes:
+    - niuno3-data:/data
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+services:
+  dashboard:
+    <<: *common
+    environment:
+      <<: *environment
+      NIUNO3_TRUSTED_PROXIES: ${NIUNO3_TRUSTED_PROXIES:-}
+    ports:
+      - "${NIUNO3_BIND_ADDRESS:-127.0.0.1}:${NIUNO3_PORT:-8789}:8789"
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8789/healthz',timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+  worker:
+    <<: *common
+    command: [python, -m, app.entrypoints.worker]
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    stop_grace_period: 45s
+    healthcheck:
+      test: [CMD, python, -m, app.entrypoints.worker_health]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+volumes:
+  niuno3-data:

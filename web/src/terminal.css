@@ -1,0 +1,491 @@
+/* Terminal layout: flat sections, aligned data and restrained control states. */
+.terminal-header {
+  height: 50px;
+  gap: 30px;
+  padding-inline: 20px;
+}
+.brand {
+  gap: 8px;
+}
+.brand strong {
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+.brand-mark {
+  width: 29px;
+  height: 29px;
+}
+.terminal-nav {
+  gap: 4px;
+}
+.terminal-nav a {
+  padding-inline: 18px;
+  font-size: 13px;
+}
+.terminal-nav a.active {
+  color: var(--ink);
+  background: transparent;
+  border-bottom-color: var(--accent);
+}
+.terminal-nav a svg {
+  display: none;
+}
+.environment-label {
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+main {
+  padding: 16px 20px 48px;
+  max-width: 1800px;
+}
+.page-heading {
+  margin-bottom: 14px;
+  min-height: 28px;
+}
+.page-title {
+  display: block;
+}
+.page-heading h1 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.status-pill {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.status-pill i,
+.status-dot {
+  background: var(--muted);
+  width: 5px;
+  height: 5px;
+}
+.terminal-statusbar {
+  height: 26px;
+  padding-inline: 20px;
+  font-size: 11px;
+}
+.terminal-statusbar .timezone {
+  font-size: 10px;
+}
+.panel {
+  box-shadow: none;
+}
+.panel-heading {
+  padding: 9px 14px;
+  min-height: 42px;
+}
+.panel-heading h2 {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tabs {
+  gap: 20px;
+}
+.tabs button {
+  padding: 11px 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.tabs button.selected {
+  background: transparent;
+  border-bottom-color: var(--accent);
+  color: var(--ink);
+}
+.tabs button:hover:not(.selected) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink);
+}
+.count-badge {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.tabs button .count-badge {
+  margin-left: 6px;
+}
+.account-panel .panel-heading {
+  min-height: 42px;
+  padding: 0 14px;
+}
+.account-panel .table-scroll {
+  max-height: 460px;
+}
+.holdings-table th {
+  padding-block: 9px;
+  font-size: 12px;
+}
+.holdings-table td {
+  padding-block: 9px;
+  font-size: 13px;
+}
+.holdings-table .table-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+.holdings-table td small {
+  font-size: 11px;
+  margin-top: 3px;
+}
+.table-name:hover {
+  color: var(--accent-text);
+}
+.market-stats.market-overview {
+  border: 0;
+  border-block: 1px solid var(--line);
+  border-radius: 0;
+  margin-bottom: 14px;
+  padding-block: 13px;
+  background: transparent;
+}
+.market-overview > div {
+  padding: 0 16px;
+}
+.market-overview > div:first-child {
+  padding-left: 0;
+}
+.market-overview span {
+  font-size: 12px;
+  margin: 0;
+}
+.market-overview strong {
+  font-size: 22px;
+  font-weight: 500;
+}
+.market-overview .date-value {
+  font-size: 15px;
+  line-height: 26px;
+}
+.market-panel .panel-heading {
+  padding: 8px 14px;
+}
+.market-panel .market-toolbar {
+  padding: 10px 14px;
+  background: transparent;
+  border-bottom: 1px solid var(--line);
+}
+.market-toolbar input,
+.market-toolbar select {
+  min-height: 34px;
+}
+.market-table th {
+  padding-block: 10px;
+}
+.market-table td {
+  padding-block: 8px;
+}
+.market-table .quote-price,
+.market-table .quote-change {
+  font-size: 13px;
+}
+.market-table .table-name {
+  font-weight: 500;
+  font-size: 13px;
+}
+.pagination {
+  padding: 10px 14px;
+  background: transparent;
+}
+.notice {
+  border-radius: 2px;
+}
+.login-layout {
+  max-width: 400px;
+  margin: 48px auto;
+}
+.login-card {
+  padding: 26px;
+}
+.login-card h2 {
+  font-size: 18px;
+}
+.login-card > p {
+  line-height: 1.7;
+}
+.system-details {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding-inline: 0;
+  margin-top: 14px;
+}
+.system-details > summary {
+  min-height: 40px;
+}
+.signal-screen .terminal-header {
+  flex-basis: 50px;
+  height: 50px;
+}
+.signal-screen main {
+  max-width: none;
+  padding: 8px 12px;
+}
+.signal-screen .page-heading {
+  margin-bottom: 8px;
+  min-height: 28px;
+}
+.signal-screen .page-heading h1 {
+  font-size: 16px;
+}
+.signal-screen .signal-workbench {
+  gap: 8px;
+}
+.signal-screen .workbench-summary {
+  padding: 4px 0 8px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  line-height: 1.6;
+}
+@media (max-width: 1100px) {
+  .terminal-header {
+    gap: 20px;
+    padding-inline: 16px;
+  }
+  .terminal-nav a {
+    padding-inline: 14px;
+  }
+  main {
+    padding-inline: 16px;
+  }
+}
+@media (min-width: 701px) and (max-width: 850px) {
+  .terminal-header {
+    height: 50px;
+    flex-wrap: nowrap;
+    gap: 16px;
+  }
+  .brand,
+  .terminal-session {
+    height: 50px;
+  }
+  .terminal-nav {
+    order: 0;
+    width: auto;
+    height: auto;
+  }
+  .terminal-nav a {
+    padding-inline: 10px;
+    font-size: 12px;
+  }
+  .environment-label {
+    display: none;
+  }
+  .signal-screen .terminal-header {
+    height: 50px;
+    flex-basis: 50px;
+  }
+}
+@media (max-width: 700px) {
+  .app-shell .terminal-header {
+    height: 48px;
+    min-height: 48px;
+  }
+  .brand strong {
+    font-size: 18px;
+  }
+  .brand-mark {
+    width: 26px;
+    height: 26px;
+  }
+  .terminal-session {
+    height: auto;
+  }
+  .environment-label {
+    font-size: 10px;
+  }
+  .app-shell .terminal-nav a {
+    padding: 7px 2px;
+    border-radius: 0;
+  }
+  .app-shell .terminal-nav a svg {
+    display: block;
+  }
+  .app-shell .terminal-nav a.active {
+    background: transparent;
+    color: var(--accent-text);
+  }
+  .app-shell main {
+    padding-top: 12px;
+  }
+  .app-shell .page-heading {
+    margin-bottom: 12px;
+    gap: 8px;
+    align-items: center;
+  }
+  .app-shell .page-heading h1 {
+    font-size: 18px;
+  }
+  .app-shell .heading-actions {
+    max-width: 54%;
+  }
+  .app-shell .status-pill {
+    padding: 0;
+    font-size: 10px;
+  }
+  .app-shell .tabs button {
+    border-radius: 0;
+  }
+  .account-panel .tabs .count-badge {
+    margin-left: 4px;
+    padding: 0;
+    min-width: 0;
+  }
+  .market-stats.market-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-bottom: 12px;
+    padding: 0;
+  }
+  .market-stats.market-overview > div {
+    padding: 12px;
+  }
+  .market-overview > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+  .market-overview > div:nth-child(2) {
+    border-right: 0;
+  }
+  .market-overview span {
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+  .market-overview strong {
+    font-size: 20px;
+  }
+  .market-overview .date-value {
+    font-size: 15px;
+    line-height: 24px;
+  }
+  .app-shell .mobile-quote-row,
+  .mobile-holding > summary {
+    padding-inline: 12px;
+  }
+  .system-details {
+    margin-top: 12px;
+    padding-inline: 0;
+  }
+  .login-layout {
+    margin: 28px auto;
+  }
+  .login-card {
+    padding: 24px;
+  }
+  .signal-screen .page-heading h1 {
+    font-size: 16px;
+  }
+  .signal-screen .workbench-summary {
+    padding: 8px 0;
+  }
+}
+@media (max-width: 370px) {
+  .environment-label {
+    display: none;
+  }
+  .app-shell .page-heading {
+    flex-wrap: wrap;
+  }
+  .app-shell .heading-actions {
+    max-width: 100%;
+  }
+}
+
+/* Keep the overview compact without changing the other workspaces. */
+.overview-screen main {
+  padding-top: 8px;
+}
+.overview-screen .page-heading {
+  min-height: 24px;
+  margin-bottom: 4px;
+}
+.overview-screen .page-heading h1 {
+  font-size: 16px;
+}
+.overview-screen .account-panel .table-scroll {
+  min-height: 0;
+}
+.overview-screen .overview > .footnote {
+  margin: 6px 0;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.overview-screen .system-details {
+  margin-top: 6px;
+}
+.overview-screen .system-details > summary {
+  min-height: 32px;
+  padding-block: 4px;
+}
+@media (min-width: 701px) {
+  .overview-screen main {
+    padding-inline: 14px;
+  }
+  .overview-screen .account-panel .panel-heading {
+    min-height: 34px;
+    padding-inline: 10px;
+  }
+  .overview-screen .account-panel .tabs button {
+    min-height: 32px;
+    padding-block: 7px;
+    font-size: 12px;
+    line-height: 16px;
+  }
+  .overview-screen .holdings-table th {
+    padding: 6px 10px;
+    font-size: 11px;
+    line-height: 16px;
+  }
+  .overview-screen .holdings-table td {
+    padding: 3px 10px;
+    line-height: 18px;
+  }
+  .overview-screen .holdings-table .table-name {
+    line-height: 18px;
+  }
+  .overview-screen .holdings-table td small {
+    margin-top: 1px;
+    line-height: 15px;
+  }
+}
+@media (max-width: 700px) {
+  .overview-screen .overview .account-panel .panel-heading {
+    padding: 0 8px;
+  }
+  .overview-screen .mobile-holding summary {
+    min-height: 60px;
+    padding-block: 6px;
+    gap: 6px;
+  }
+  .overview-screen .mobile-holding .mobile-security small {
+    margin-top: 3px;
+  }
+  .overview-screen .holding-profit b {
+    font-size: 18px;
+  }
+  .overview-screen .holding-profit small {
+    margin-top: 2px;
+    font-size: 11px;
+  }
+  .overview-screen .mobile-facts > div {
+    padding-block: 4px;
+  }
+  .overview-screen .system-details > summary {
+    min-height: 44px;
+  }
+}
