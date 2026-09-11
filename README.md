@@ -1,4 +1,4 @@
-# 牛牛3号 · NiuNo3
+<img width="1200" alt="NiuNo3 牛牛3号" src="docs/assets/readme/niuno3.svg" />
 
 面向沪深上市 ETF 的行情观察、策略研究与自动模拟交易工作台。
 
