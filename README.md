@@ -6,7 +6,7 @@
 
 **所有交易均发生在模拟账本中，项目没有券商连接或实盘下单接口。**
 
-[在线站点](https://niualpha.com) · [功能介绍](#功能介绍) · [快速启动](#快速启动) · [本地开发](#本地开发) · [详细文档](#详细文档) · [MIT License](LICENSE)
+[在线站点](https://niualpha.com) · [功能介绍](#功能介绍) · [快速启动](#快速启动) · [本地开发](#本地开发) · [详细文档](#详细文档) · [Apache License 2.0](LICENSE)
 
 ## 功能介绍
 
@@ -287,6 +287,6 @@ docs/             策略、数据口径与运维说明
 
 ## 开源协议
 
-本项目采用 [MIT License](LICENSE)，版权所有 © 2026 dijunkun。
+本项目采用 [Apache License 2.0](LICENSE)，版权所有 © 2026 dijunkun。
 
 第三方依赖与资源保留各自的许可证；Roboto 字体使用 [SIL Open Font License 1.1](web/public/assets/licenses/Roboto-OFL.txt)。
