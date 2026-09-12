@@ -776,7 +776,7 @@ class Worker:
             self.last_equity = time.monotonic()
             if now.time() >= clock(15, 10) or not self.calendar.is_open(now.date()):
                 with self.db.transaction() as conn:
-                    retain_evidence(conn, now)
+                    retain_evidence(conn, now, self.calendar)
 
     def close(self):
         self.notifications.close()

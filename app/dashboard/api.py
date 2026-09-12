@@ -267,6 +267,7 @@ def create_app(
             data.update(
                 {
                     "session_open": calendar.session(now),
+                    "display_day": expected_day(calendar, now),
                     "automation": automation_status(conn, calendar, now, data),
                     "strategy": "裸 K 价格行为 v2"
                     if config.strategy_model == "price_action"
@@ -746,11 +747,15 @@ def create_app(
     @app.get("/api/v1/account")
     def account():
         with db.connect() as conn:
-            data = snapshot(conn, clock())
+            now = clock()
+            data = snapshot(conn, now)
+            data["display_day"] = expected_day(calendar, now)
             data["equity"] = [
                 {"at": r["at"], "nav": yuan(r["nav"]), "stale": bool(r["stale"])}
                 for r in conn.execute(
-                    "SELECT * FROM equity WHERE at IN (SELECT MAX(at) FROM equity GROUP BY day) ORDER BY at DESC LIMIT 365"
+                    "SELECT * FROM equity WHERE at IN (SELECT MAX(at) FROM equity "
+                    "WHERE day<=? AND at<=? GROUP BY day) ORDER BY at DESC LIMIT 365",
+                    (data["display_day"] or iso(now)[:10], iso(now)),
                 )
             ][::-1]
             data["fees"] = yuan(conn.execute("SELECT COALESCE(SUM(fee),0) FROM fills").fetchone()[0])

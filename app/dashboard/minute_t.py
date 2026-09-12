@@ -1,13 +1,38 @@
 """Read-only status for minute T signals, frozen cycle levels and execution waits."""
 
-from datetime import time
+from datetime import datetime, time
 
-from app.core.types import dt, iso, yuan
+from app.core.types import TZ, dt, iso, yuan
+from app.market_data.intraday import expected_day, snapshot_key
 from app.storage.db import get_state, instruments, latest_quote, sold_today
 from app.strategies.minute_t import enabled, context, signal, sell_reference
 
 
+def display_context(conn, symbol, calendar, now, tick):
+    """Keep the last observed structure at rest; execution still uses the live clock."""
+    phase = snapshot_key(calendar, now)
+    if phase:
+        source = get_state(conn, f"minute5:{symbol}", {})
+        try:
+            bar_at, fetched_at = dt(source["as_of"]), dt(source["fetched_at"])
+            if (
+                bar_at.date() == dt(phase).date()
+                and bar_at <= dt(phase)
+                and bar_at <= fetched_at <= now
+            ):
+                return context(conn, symbol, fetched_at, tick)
+        except (KeyError, ValueError, TypeError):
+            pass
+    return context(conn, symbol, now, tick)
+
+
 def minute_t_payload(conn, calendar, now, config):
+    now = now.astimezone(TZ)
+    day = expected_day(calendar, now)
+    display_at = (
+        min(now, datetime.combine(datetime.fromisoformat(day).date(), time(23, 59, 59), TZ))
+        if day else now
+    )
     mode = enabled(config)
     active = mode and config.intraday_t_enabled and config.execution_mode == "intraday"
     plan = get_state(conn, "live_targets", {})
@@ -21,10 +46,10 @@ def minute_t_payload(conn, calendar, now, config):
         for row in conn.execute(
             "SELECT symbol,SUM(quantity) quantity,SUM(CASE WHEN available_day<=? THEN quantity ELSE 0 END) available "
             "FROM lots WHERE quantity>0 GROUP BY symbol",
-            (now.date().isoformat(),),
+            (display_at.date().isoformat(),),
         )
     }
-    for symbol in sold_today(conn, now):
+    for symbol in sold_today(conn, display_at) if day else ():
         positions.setdefault(symbol, {"symbol": symbol, "quantity": 0, "available": 0})
     items = []
     for symbol in sorted(positions):
@@ -35,14 +60,14 @@ def minute_t_payload(conn, calendar, now, config):
             continue
         cycle = conn.execute(
             "SELECT * FROM t_cycles WHERE symbol=? AND day=? ORDER BY id DESC LIMIT 1",
-            (symbol, now.date().isoformat()),
+            (symbol, day),
         ).fetchone()
         live_cycle = cycle if cycle and cycle["status"] in {"selling", "waiting_buy", "buying"} else None
         observation_only = position["quantity"] == 0 and not live_cycle
         latest = latest_quote(conn, symbol)
         quote = latest[1] if latest else None
-        observation = context(conn, symbol, now, instrument.tick)
-        if active and quote and not observation_only:
+        observation = display_context(conn, symbol, calendar, now, instrument.tick)
+        if active and running and quote and not observation_only:
             observation = signal(
                 conn, plan, instrument, quote, config, now, "t_buy" if live_cycle else "t_sell", live_cycle
             )
@@ -56,7 +81,10 @@ def minute_t_payload(conn, calendar, now, config):
         if not active:
             message = "当前使用日线做 T" if config.intraday_t_enabled else "做 T 已关闭"
         elif not running:
-            message = "非交易时段，等待下一交易时段"
+            message = (
+                f"休市，展示 {day} 最近已采集的分钟结构；开盘后自动更新"
+                if day and observation.get("support") else "非交易时段，等待下一交易时段"
+            )
         elif not alive:
             message = "后台心跳中断，等待服务恢复"
         elif not observation_only and not get_state(conn, "buy_ready", False):
@@ -110,5 +138,7 @@ def minute_t_payload(conn, calendar, now, config):
         "running": running,
         "worker_alive": alive,
         "at": iso(now),
+        "day": day,
+        "session_snapshot": bool(day and not running),
         "items": items,
     }

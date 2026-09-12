@@ -1,11 +1,13 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
-from app.core.types import iso
+from app.core.calendar import Calendar
+from app.core.types import TZ, iso
 from app.storage.db import get_state, set_state
 
 
-def retain_evidence(conn, now: datetime):
+def retain_evidence(conn, now: datetime, calendar=None):
     """Bound raw snapshots while keeping every fill's quote, prior sample, and current baselines."""
+    now = now.astimezone(TZ)
     today = now.date().isoformat()
     if get_state(conn, "maintenance_day") == today:
         return
@@ -24,9 +26,20 @@ def retain_evidence(conn, now: datetime):
         "INSERT OR IGNORE INTO protected_quotes SELECT id FROM "
         "(SELECT id,ROW_NUMBER() OVER(PARTITION BY symbol ORDER BY at DESC,id DESC) n FROM quotes) WHERE n<=2"
     )
+    cutoff = now - timedelta(days=7)
+    calendar = calendar or Calendar()
+    try:
+        day = (
+            today if calendar.is_open(now.date()) and now.time() >= time(9, 30)
+            else calendar.previous(now.date())
+        )
+        # Long holidays must not age the last session's intraday display out of storage.
+        cutoff = min(cutoff, datetime.combine(date.fromisoformat(day), time.min, TZ))
+    except ValueError:
+        pass
     cursor = conn.execute(
         "DELETE FROM quotes WHERE at<? AND id NOT IN (SELECT id FROM protected_quotes)",
-        (iso(now - timedelta(days=7)),),
+        (iso(cutoff),),
     )
     conn.execute("DELETE FROM liquidity WHERE quote_id NOT IN (SELECT id FROM quotes)")
     # Every order freezes its own minute input; retain source bars for recent inspection.

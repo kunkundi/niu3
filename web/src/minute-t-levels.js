@@ -7,7 +7,8 @@ const definitions = [
 ]
 
 export function minuteTDay(snapshot) {
-  return snapshot?.enabled && snapshot.model === 'minute5' ? exchangeTime(snapshot.at)?.day : null
+  if (!snapshot?.enabled || snapshot.model !== 'minute5' || !exchangeTime(snapshot.at)) return null
+  return 'day' in snapshot ? snapshot.day : exchangeTime(snapshot.at).day
 }
 
 // These are current reference prices, never historical signals or executed fills.
@@ -50,15 +51,11 @@ export function minuteTLevels(snapshot, data) {
   })
 }
 
-// Include current holdings and securities actually sold today, including closed
-// positions that may be bought back. Older closed positions stay in the timeline.
-export function minuteTSecurities(
-  securities,
-  snapshot,
-  positions = [],
-  today = exchangeTime(snapshot?.at)?.day || exchangeTime(new Date().toISOString()).day,
-) {
-  const day = minuteTDay(snapshot) === today ? today : null
+// The server supplies the exchange date, including the last session on holidays.
+// Older closed positions remain in the timeline.
+export function minuteTSecurities(securities, snapshot, positions = [], displayDay) {
+  const day = displayDay || snapshot?.day || minuteTDay(snapshot)
+  const today = day || exchangeTime(snapshot?.at)?.day || exchangeTime(new Date().toISOString()).day
   const held = positions
     .filter((item) => Number(item.quantity) > 0)
     .map((item) => {

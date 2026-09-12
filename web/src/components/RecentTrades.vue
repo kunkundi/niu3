@@ -25,14 +25,20 @@ const events = computed(() => recentTradeEvents(items.value))
 const view = ref('charts'),
   chartLimit = ref(4)
 const minuteT = useMinuteT()
-const securities = computed(() =>
-  minuteTSecurities(
-    tradedSecurities(events.value),
-    minuteT.value,
-    props.positions,
+const displayDay = computed(
+  () =>
+    state.status.display_day ||
+    minuteT.value?.day ||
     exchangeTime(state.status.intraday_polling?.server_at || updatedAt.value || new Date().toISOString())
       ?.day,
-  ),
+)
+const displayDayLabel = computed(() =>
+  displayDay.value === exchangeTime(state.status.at || updatedAt.value)?.day
+    ? '今日'
+    : displayDay.value || '最近交易日',
+)
+const securities = computed(() =>
+  minuteTSecurities(tradedSecurities(events.value), minuteT.value, props.positions, displayDay.value),
 )
 const visible = computed(() => events.value.slice(0, limit.value))
 const selected = computed(() => events.value.find((event) => event.id === selectedId.value))
@@ -153,8 +159,8 @@ onUnmounted(() => {
       <Icon name="clock" :size="22" />
       <div>
         <template v-if="view === 'charts'">
-          <strong>暂无持仓或今日卖出记录</strong>
-          <p>这里展示当前持仓及今日已卖出 ETF 的分时买卖点。</p>
+          <strong>暂无持仓或{{ displayDayLabel }}卖出记录</strong>
+          <p>这里展示当前持仓及{{ displayDayLabel }}已卖出 ETF 的分时买卖点。</p>
         </template>
         <template v-else>
           <strong>{{ !updatedAt ? '正在读取成交记录…' : '尚未发生模拟成交' }}</strong>
@@ -164,7 +170,7 @@ onUnmounted(() => {
     </div>
     <footer v-if="securities.length && view === 'charts'" class="recent-footer">
       <span
-        >当前持仓及今日卖出 · 可切换历史成交日 · 成交按实际时间与价格定位（北京时间）
+        >当前持仓及{{ displayDayLabel }}卖出 · 可切换历史成交日 · 成交按实际时间与价格定位（北京时间）
         <span v-if="total > items.length"> · 仅含最近 {{ items.length }} 笔成交</span>
       </span>
       <button v-if="securities.length > chartLimit" class="text-button" @click="chartLimit += 4">

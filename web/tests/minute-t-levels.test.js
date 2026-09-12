@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { minuteTLevels, minuteTSecurities, tradeIntradayDays } from '../src/minute-t-levels.js'
+import { minuteTDay, minuteTLevels, minuteTSecurities, tradeIntradayDays } from '../src/minute-t-levels.js'
 import { intradayGeometry } from '../src/intraday-levels.js'
 import { tradeIntradayChart } from '../src/trade-intraday-chart.js'
 import { recentTradeEvents, tradedSecurities } from '../src/recent-trades.js'
@@ -259,4 +259,33 @@ test('real T fills retain their actual execution coordinates and explicit T acti
   assert.match(chart.anchors[0].label, /做 T 买回 13:30:00/)
   assert.equal(chart.anchors[0].minute, 150)
   assert.equal(chart.anchors[0].price, 0.85)
+})
+
+test('weekends preserve the previous session cards and T levels until the next opening', () => {
+  const closed = { ...snapshot, day: '2026-09-11', at: '2026-09-13T16:00:00+08:00' }
+  const securities = [
+    { symbol: 'sh515220', events: [{ day: '2026-09-11', side: 'SELL' }] },
+    { symbol: 'sh561360', events: [{ day: '2026-09-10', side: 'SELL' }] },
+  ]
+  assert.equal(minuteTDay(closed), '2026-09-11')
+  assert.equal(minuteTLevels(closed, data).length, 3)
+  for (const state of [closed, { ...closed, enabled: false }, null]) {
+    const cards = minuteTSecurities(securities, state, snapshot.items, '2026-09-11')
+    assert.deepEqual(
+      cards.map((card) => card.symbol),
+      ['sh512800', 'sh515220'],
+    )
+    assert.ok(cards.every((card) => card.currentDay === '2026-09-11'))
+  }
+  const reopened = { ...closed, day: '2026-09-14', at: '2026-09-14T09:30:00+08:00' }
+  assert.deepEqual(minuteTLevels(reopened, data), [])
+  assert.deepEqual(minuteTLevels({ ...closed, day: null }, data), [])
+  assert.deepEqual(minuteTLevels(closed, { ...data, day: '2026-09-10' }), [])
+  const cards = minuteTSecurities(securities, reopened, snapshot.items, '2026-09-14')
+  assert.deepEqual(
+    cards.map((card) => card.symbol),
+    ['sh512800'],
+  )
+  assert.equal(cards[0].currentDay, '2026-09-14')
+  assert.equal(tradeIntradayChart(data, [], data.day, 280, minuteTLevels(closed, data)).anchors.length, 0)
 })

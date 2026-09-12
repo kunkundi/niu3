@@ -6,6 +6,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.dashboard.api import create_app
+from app.core.types import iso
 from app.storage.db import get_state, set_state
 from tests.helpers import Fixture, at
 
@@ -39,6 +40,27 @@ class ApiTests(unittest.TestCase):
             with self.subTest(protected=path):
                 self.assertEqual(self.client.get("/api/v1/" + path).status_code, 401)
 
+
+    def test_closed_session_equity_stops_at_the_display_day_without_changing_the_ledger(self):
+        for day in ("2026-09-11", "2026-09-12", "2026-09-13", "2026-09-14"):
+            with self.f.db.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO equity VALUES(?,?,?,?,?,?,?)",
+                    (iso(at(day + "T09:30:00")), day, 100000000000, 0, 0, 100000000000, 0),
+                )
+        before = {table: self.f.rows(table) for table in ("equity", "lots", "cash_ledger")}
+        for stamp, day in (
+            ("2026-09-12T16:00:00", "2026-09-11"),
+            ("2026-09-14T09:29:59", "2026-09-11"),
+            ("2026-09-14T09:30:00", "2026-09-14"),
+        ):
+            with self.subTest(stamp=stamp):
+                with TestClient(create_app(self.f.db, self.f.calendar, clock=lambda: at(stamp))) as client:
+                    data = client.get("/api/v1/account").json()
+                    self.assertEqual(data["display_day"], day)
+                    self.assertEqual(data["equity"][-1]["at"][:10], day)
+                    self.assertEqual(data["cash"], 100000)
+        self.assertEqual(before, {table: self.f.rows(table) for table in before})
 
     def test_orders_include_names_keep_missing_metadata_and_preserve_pagination(self):
         self.f.order()

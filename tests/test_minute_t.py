@@ -10,6 +10,7 @@ from app.automation.service import Worker
 from app.core.config import Settings
 from app.core.types import iso, units
 from app.dashboard.api import create_app
+from app.dashboard.minute_t import display_context
 from app.market_data.minute_bars import (
     normalize,
     save_five_minute,
@@ -466,6 +467,60 @@ class MinuteTTradingTests(unittest.TestCase):
         self.worker.submit.reset_mock()
         self.worker.schedule(self.now + timedelta(days=1))
         self.assertNotIn("minute5:sh510300", [call.args[0] for call in self.worker.submit.call_args_list])
+
+    def test_weekend_preserves_sold_etfs_and_levels_until_the_next_open(self):
+        self.now = at("2026-09-11T10:30:10")
+        self.close_position()
+        self.minutes(minute_rows("2026-09-11"))
+        tables = ["quotes", "minute_bars", "state", "orders", "fills", "lots", "t_cycles", "cash_ledger"]
+        with TestClient(create_app(self.f.db, self.f.calendar, clock=lambda: self.now)) as client:
+            before = {table: self.f.rows(table) for table in tables}
+            for stamp in (
+                "2026-09-11T16:00:00", "2026-09-12T00:01:00", "2026-09-13T23:59:59",
+                "2026-09-14T09:29:59",
+            ):
+                with self.subTest(stamp=stamp):
+                    self.now = at(stamp).astimezone(timezone.utc)
+                    data = client.get("/api/v1/t-strategy").json()
+                    self.assertEqual(data["day"], "2026-09-11")
+                    self.assertTrue(data["session_snapshot"])
+                    self.assertFalse(data["running"])
+                    [item] = data["items"]
+                    self.assertTrue(item["observation_only"])
+                    self.assertEqual((item["support"], item["resistance"]), (1.0, 1.03))
+                    self.assertIn("2026-09-11", item["message"])
+                    self.assertEqual(client.get("/api/v1/status").json()["display_day"], "2026-09-11")
+                    with self.f.db.connect() as conn:
+                        self.assertFalse(context(conn, "sh510300", self.now, 1000)["ready"])
+            self.now = at("2026-09-14T09:30:00")
+            data = client.get("/api/v1/t-strategy").json()
+            self.assertEqual(data["day"], "2026-09-14")
+            self.assertFalse(data["session_snapshot"])
+            self.assertEqual(data["items"], [])
+        self.assertEqual(before, {table: self.f.rows(table) for table in tables})
+
+    def test_holiday_preserves_real_structure_but_rejects_wrong_dates_and_future_sources(self):
+        saved_at = at("2026-02-13T14:59:50")
+        rows = minute_rows("2026-02-13")
+        for i, row in enumerate(rows):
+            row["at"] = iso(at("2026-02-13T14:25:00") + timedelta(minutes=5 * i))
+        self.minutes(rows, saved_at)
+        self.now = at("2026-02-23T23:59:00")
+        with self.f.db.connect() as conn:
+            shown = display_context(conn, "sh510300", self.f.calendar, self.now, 1000)
+            self.assertTrue(shown["ready"])
+            self.assertEqual(shown["bar_at"], rows[-1]["at"])
+            self.assertFalse(context(conn, "sh510300", self.now, 1000)["ready"])
+            self.assertFalse(display_context(conn, "sh510300", self.f.calendar, at("2026-02-24T09:30:00"), 1000)["ready"])
+        with self.f.db.transaction() as conn:
+            source = get_state(conn, "minute5:sh510300")
+            for changes in (
+                {"as_of": "2026-02-12T14:55:00+08:00"},
+                {"fetched_at": "2026-02-24T15:00:00+08:00"},
+            ):
+                with self.subTest(changes=changes):
+                    set_state(conn, "minute5:sh510300", {**source, **changes})
+                    self.assertFalse(display_context(conn, "sh510300", self.f.calendar, self.now, 1000)["ready"])
 
     def test_minute_download_slots_rotate_to_least_recent_attempts(self):
         with self.f.db.transaction() as conn:

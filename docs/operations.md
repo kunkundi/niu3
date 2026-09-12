@@ -128,7 +128,7 @@ docker compose cp dashboard:/data/backup-20260907.sqlite3 ./backups/
 
 恢复时先停止两个服务并备份原卷，使用维护容器把已核验的备份复制到卷中 `/data/niuno3.sqlite3`，移走对应旧 WAL／SHM，保留 UID 10001 的权限，再启动并运行核对。不要在 worker 运行时替换数据库；核对失败不能通过直接修改批次、资金或成交表解除。
 
-原始行情保留最近 7 天，永久保留每笔成交的报价及前一成交量样本、订单最后报价和每只最新两个样本。普通任务日志保留 30 天，决策和控制日志、完整计划输入、净值和交易账本保留。清理在收盘后或休市日每天至多一次执行；SQLite 复用空闲页，不在盘中 VACUUM。
+原始行情保留最近 7 天；长假期间额外保留最近交易日的全部报价，直到下一交易日开盘，避免分时图跨假期缺失。永久保留每笔成交的报价及前一成交量样本、订单最后报价和每只最新两个样本。普通任务日志保留 30 天，决策和控制日志、完整计划输入、净值和交易账本保留。清理在收盘后或休市日每天至多一次执行；SQLite 复用空闲页，不在盘中 VACUUM。
 
 ## API v1
 
@@ -149,7 +149,7 @@ docker compose cp dashboard:/data/backup-20260907.sqlite3 ./backups/
 | `GET /signals/history`、`GET /signals/history/{plan_id}`、`GET /signals/{symbol}/chart` | 信号历史与图表 | 否 |
 | `GET /account` | 现金、持仓、可卖数量、收益及净值序列 | 否 |
 | `GET /orders`、`GET /trades`、`GET /actions` | 订单、成交、分红折算；`/trades` 支持 `symbol=sh510300` 按标的筛选并返回对应总数，分页最多 200 条 | 否 |
-| `GET /t-strategy` | 做 T 周期、后台状态、当前持仓及今日已卖出 ETF 的分钟支撑压力、轮次及执行等待原因；只读，不发起行情下载或交易 | 否 |
+| `GET /t-strategy` | 做 T 周期、后台状态、当前持仓及展示交易日已卖出 ETF 的分钟支撑压力、轮次及执行等待原因；只读，不发起行情下载或交易 | 否 |
 | `GET /runs` | 运行日志 | 是 |
 | `GET /config`、`PATCH /config` | 参数、标签、版本；保存新版本 | 是 |
 
@@ -160,6 +160,8 @@ docker compose cp dashboard:/data/backup-20260907.sqlite3 ./backups/
 ETF 列表及详情包含 `focus_group/focus_label/amount20/turnover20/turnover_reason/representative/representative_symbol/liquidity_rank/focus_reason`。`turnover20` 使用比例值（0.01 = 1%），缺失为 null，`sort=turnover20` 降序且缺失排最后。列表 `focus` 提供 `minimum_amount/minimum_turnover` 两项门槛及分组、代表、换手率不足和待齐数量。代表在所选候选范围内满足两项门槛后确定，再应用搜索和分页，搜索非代表不会让它成为临时代表。`PATCH /config` 可保存两项下限，0 分别表示不限制。
 
 ### 买卖观察
+
+非交易日及下一交易日开盘前，页面展示最近一个已开盘交易日的信息，并标明具体日期。`GET /status`、`GET /account` 的 `display_day` 与 `GET /t-strategy` 的 `day` 使用同一交易日历口径；后者的 `at` 保留实际读取时间。资产走势截至该展示交易日，后台估值记录仍完整保留。分时买卖点保留该交易日已卖出的 ETF，分钟 T 参考价使用该日最后已采集的完整分钟结构，休市期间不因时间流逝消失，开盘后切换新交易日。交易执行仍使用实际时间和原有新鲜度检查；缺失的分钟行情不补造。
 
 界面中的证券代码统一仅显示六位数字，保留前导零；列表、卡片、图表、成交与分红记录、搜索提示、确认弹窗及运行日志均采用同一展示规则。行情请求、路由参数、查询匹配和账本继续使用带交易所前缀的原始标识，展示格式不会改写正式数据。
 

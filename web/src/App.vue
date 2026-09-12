@@ -6,6 +6,7 @@ import ThemeToggle from './components/ThemeToggle.vue'
 import WorkbenchDialog from './components/WorkbenchDialog.vue'
 import logoUrl from './assets/niuno3-logo.svg'
 import { preventTouchMenu } from './chart-pointer'
+import { exchangeTime } from './trade-observation.js'
 import { api, refresh, state, notify, completeAuthentication, cancelAuthentication } from './state'
 const route = useRoute()
 const password = ref(''),
@@ -39,6 +40,9 @@ const links = [
 ]
 const statusLabel = computed(() =>
   !state.checked || !state.status.at ? '连接中' : state.status.automation?.label || '正在读取运行状态',
+)
+const previousSession = computed(
+  () => state.status.display_day && state.status.display_day !== exchangeTime(state.status.at)?.day,
 )
 let interval,
   clockInterval,
@@ -154,6 +158,9 @@ async function logout() {
             >
           </div>
         </div>
+        <div v-if="previousSession && route.path !== '/settings'" class="session-note" role="status">
+          休市 · 展示最近交易日 {{ state.status.display_day }} 的信息，开盘后自动更新
+        </div>
         <div class="notice error" role="alert" v-if="state.error">
           <Icon name="warning" :size="18" />{{ state.error }}
         </div>
@@ -223,3 +230,13 @@ async function logout() {
     </WorkbenchDialog>
   </div>
 </template>
+
+<style scoped>
+.session-note {
+  flex-shrink: 0;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+</style>

@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.dashboard.api import create_app
 from app.dashboard.trade_intraday import recorded_intraday
 from app.core.types import iso, units
+from app.storage.maintenance import retain_evidence
 from tests.helpers import Fixture, at
 
 
@@ -46,6 +47,22 @@ class RecordedIntradayTests(unittest.TestCase):
         self.f.quote(at("2026-09-07T09:31:00"))
         self.assertEqual(len(self.read()["points"]), 1)
         self.assertEqual(self.read()["previous_close"], 1)
+
+    def test_long_holiday_retains_the_previous_session_minutes_until_trading_resumes(self):
+        self.f.quote(at("2026-02-12T09:30:00"))
+        for stamp in ["09:30:00", "10:00:00", "11:00:00", "14:59:00", "15:00:00"]:
+            self.f.quote(at("2026-02-13T" + stamp))
+        before = self.read("2026-02-13", "2026-02-13T16:00:00")["points"]
+        with self.f.db.transaction() as conn:
+            retain_evidence(conn, at("2026-02-23T23:00:00"), self.f.calendar)
+        self.assertEqual(self.read("2026-02-13", "2026-02-23T23:00:00")["points"], before)
+        self.assertEqual(self.read("2026-02-12", "2026-02-23T23:00:00")["points"], [])
+        with self.f.db.transaction() as conn:
+            retain_evidence(conn, at("2026-02-24T09:29:59"), self.f.calendar)
+        self.assertEqual(self.read("2026-02-13", "2026-02-24T09:29:59")["points"], before)
+        with self.f.db.transaction() as conn:
+            retain_evidence(conn, at("2026-02-25T16:00:00"), self.f.calendar)
+        self.assertEqual(len(self.read("2026-02-13", "2026-02-25T16:00:00")["points"]), 2)
 
     def test_day_query_is_read_only_does_not_fetch_current_session_or_invent_missing_history(self):
         self.f.quote(at("2026-09-07T09:30:00"), "1.02")
