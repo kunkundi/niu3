@@ -11,6 +11,8 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 
+from .formatting import rich_message
+
 CHANNELS = {
     "feishu": {"label": "飞书", "fields": ["webhook", "signing_secret"]},
     "dingtalk": {"label": "钉钉", "fields": ["webhook", "signing_secret"]},
@@ -117,22 +119,31 @@ def validate_channel(channel: str, values: dict, required=True):
 
 def request_payload(channel: str, values: dict, message: str, timestamp: float):
     validate_channel(channel, values)
+    rich = rich_message(message)
     if channel == "telegram":
         return f"https://api.telegram.org/bot{values['bot_token']}/sendMessage", {
             "chat_id": values["chat_id"],
-            "text": message,
+            "text": rich["html"] if rich else message,
+            **({"parse_mode": "HTML"} if rich else {}),
             "link_preview_options": {"is_disabled": True},
         }
     url = values["webhook"]
     secret = values.get("signing_secret", "")
     if channel == "feishu":
-        payload = {"msg_type": "text", "content": {"text": message}}
+        payload = {"msg_type": "interactive", "card": rich["card"]} if rich else {
+            "msg_type": "text", "content": {"text": message},
+        }
         if secret:
             stamp = str(int(timestamp))
             digest = hmac.new(f"{stamp}\n{secret}".encode(), digestmod=hashlib.sha256).digest()
             payload.update(timestamp=stamp, sign=base64.b64encode(digest).decode())
     else:
         payload = {"msgtype": "text", "text": {"content": message}}
+        if rich:
+            payload = {"msgtype": "markdown", "markdown": (
+                {"title": rich["title"], "text": rich["markdown"]}
+                if channel == "dingtalk" else {"content": rich["markdown"]}
+            )}
         if channel == "dingtalk":
             payload["at"] = {"isAtAll": False}
             if secret:

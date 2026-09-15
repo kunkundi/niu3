@@ -127,7 +127,7 @@ async function test(id) {
     <div class="panel-heading">
       <div>
         <h2 id="notification-title">交易通知</h2>
-        <p>模拟买入、卖出成交入账后通知；同批成交合并发送。</p>
+        <p>成交入账后逐笔展示持仓变化与盈亏；同批成交合并发送。</p>
       </div>
       <span class="chip" :class="config?.enabled ? '' : 'neutral'">{{
         config?.enabled ? '已启用' : '已关闭'
@@ -153,6 +153,7 @@ async function test(id) {
           </div>
           <p class="notification-note">
             总开关关闭后不推送新成交；开启后只通知之后的成交。每条消息均标注“模拟成交，非实盘”。
+            飞书使用消息卡片，钉钉、企业微信和 Telegram 使用富文本。
           </p>
           <div class="notification-add">
             <select v-model="picker" aria-label="选择通知渠道">

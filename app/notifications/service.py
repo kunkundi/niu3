@@ -1,33 +1,15 @@
 from __future__ import annotations
 
-import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from decimal import Decimal
 from uuid import uuid4
 
 from app.core.types import iso, now_cn
 from app.storage.db import dump, get_state, set_state
+from app.dashboard.trade_positions import annotate_trade_positions
 from .channels import CHANNELS, DeliveryUncertain, NotificationError, send
 from .config import current, merged_fields
-
-
-def money(value, digits=2):
-    return f"{Decimal(value) / Decimal(1000000):,.{digits}f}"
-
-
-def fill_text(row):
-    name = json.loads(row["instrument"]).get("name", row["symbol"]) if row["instrument"] else row["symbol"]
-    direction = "买入" if row["side"] == "BUY" else "卖出"
-    lines = [
-        f"{direction} {name[:40]}（{row['symbol'].upper()}）",
-        f"{row['quantity']} 份 × {money(row['price'], 3)} 元，成交额 {money(row['gross'])} 元",
-        f"费用 {money(row['fee'])} 元"
-        + (f"，已实现盈亏 {money(row['realized'])} 元" if row["side"] == "SELL" else ""),
-        f"原因：{row['reason'][:80]}",
-        f"时间：{row['at'][:19].replace('T', ' ')} · 订单 #{row['order_id']} / 成交 #{row['id']}",
-    ]
-    return "\n".join(lines)
+from .formatting import message_fits, test_message, trade_message
 
 
 def enqueue_committed(conn, now):
@@ -41,23 +23,21 @@ def enqueue_committed(conn, now):
     if not channels:
         set_state(conn, "notification_cursor", maximum)
         return
-    rows = conn.execute(
-        "SELECT f.*,o.reason,i.payload instrument FROM fills f JOIN orders o ON o.id=f.order_id "
+    rows = [dict(row) for row in conn.execute(
+        "SELECT f.*,o.reason,o.kind order_kind,i.payload instrument FROM fills f JOIN orders o ON o.id=f.order_id "
         "LEFT JOIN instruments i ON i.symbol=f.symbol WHERE f.id>? AND f.id<=? ORDER BY f.id LIMIT ?",
         (cursor, maximum, 100),
-    ).fetchall()
+    )]
     if not rows:
         return
-    header = "NiuNo3 · 模拟成交通知\n模拟成交，非实盘 · 北京时间\n\n"
-    groups, ids, text = [], [], header
+    annotate_trade_positions(conn, rows)
+    groups, batch = [], []
     for row in rows:
-        part = fill_text(row) + "\n\n"
-        if ids and len((text + part).encode("utf-8")) > 1800:
-            groups.append((ids, text.rstrip()))
-            ids, text = [], header
-        ids.append(row["id"])
-        text += part
-    groups.append((ids, text.rstrip()))
+        if batch and not message_fits(trade_message([*batch, row])):
+            groups.append(([item["id"] for item in batch], trade_message(batch)))
+            batch = []
+        batch.append(row)
+    groups.append(([item["id"] for item in batch], trade_message(batch)))
     for ids, message in groups:
         for channel in channels:
             conn.execute(
@@ -131,9 +111,7 @@ def test_channel(db, channel, request, now, sender=send):
         if now.timestamp() - previous < 10:
             raise NotificationError("该渠道刚刚测试过，请等待 10 秒后重试")
         set_state(conn, f"notification_test:{channel}", now.timestamp())
-        message = (
-            f"NiuNo3 · 通知渠道测试\n模拟成交，非实盘\n{iso(now)}\n此消息仅验证通知渠道，不产生订单或成交。"
-        )
+        message = test_message(CHANNELS[channel]["label"], now)
         result = conn.execute(
             "INSERT INTO notification_deliveries(event_key,channel,config_version,kind,fill_ids,message,status,at,updated_at,expires_at) "
             "VALUES(?,?,?,'test','[]',?,'sending',?,?,?)",

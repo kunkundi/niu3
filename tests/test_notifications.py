@@ -259,7 +259,7 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(json.loads(rows[0]["fill_ids"]), [1, 2])
         self.assertIn("1.000", rows[0]["message"])
-        self.assertIn("1000 份", rows[0]["message"])
+        self.assertIn("1,000 份", rows[0]["message"])
         self.assertIn("模拟成交，非实盘", rows[0]["message"])
         self.assertLessEqual(len(rows[0]["message"].encode()), 1800)
 
