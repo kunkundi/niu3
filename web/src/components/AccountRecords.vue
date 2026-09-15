@@ -14,6 +14,9 @@ const props = defineProps({
 const positions = computed(() =>
   props.account.positions.map((p) => ({ ...p, warning: holdingWarning(p, props.status) })),
 )
+const dailyLabel = computed(() =>
+  props.account.daily_return?.is_today === false ? '最近交易日收益' : '今日收益',
+)
 const tab = ref('positions'),
   items = ref([]),
   error = ref(''),
@@ -105,10 +108,15 @@ defineExpose({
             ><small>{{ displayCode(p.symbol) }} · 最新 {{ money(p.price, 3) }}</small></span
           >
           <span class="holding-profit" :class="changeClass(p.pnl)"
-            ><b>{{ signedMoney(p.pnl) }}</b
+            ><small class="profit-label">浮动盈亏</small><b>{{ signedMoney(p.pnl) }}</b
             ><small>{{ pct(p.pnl_pct, true) }}</small></span
           >
           <Icon name="chevron" :size="14" />
+          <span class="holding-daily-profit">
+            <span>{{ dailyLabel }}</span>
+            <b :class="changeClass(p.daily_pnl)">{{ signedMoney(p.daily_pnl) }}</b>
+            <small v-if="p.daily_pnl_warning" class="amberText">{{ p.daily_pnl_warning }}</small>
+          </span>
           <span v-if="p.warning" class="holding-warning amberText">{{ p.warning }}</span>
         </summary>
         <dl class="mobile-facts">
@@ -155,6 +163,7 @@ defineExpose({
           <tr>
             <th>名称 / 代码</th>
             <th class="number-cell">最新价 / 成本价</th>
+            <th class="number-cell">{{ dailyLabel }}</th>
             <th class="number-cell">浮动盈亏 / 收益率</th>
             <th class="number-cell">市值 / 仓位</th>
             <th class="number-cell">持有 / 可卖份额</th>
@@ -173,6 +182,10 @@ defineExpose({
             </td>
             <td class="number-cell">
               {{ money(p.price, 3) }}<small>{{ money(p.average_cost, 3) }}</small>
+            </td>
+            <td class="number-cell" :class="changeClass(p.daily_pnl)">
+              {{ signedMoney(p.daily_pnl) }}
+              <small v-if="p.daily_pnl_warning" class="amberText">{{ p.daily_pnl_warning }}</small>
             </td>
             <td class="number-cell" :class="changeClass(p.pnl)">
               {{ signedMoney(p.pnl) }}<small class="inherit-color">{{ pct(p.pnl_pct, true) }}</small>
@@ -312,10 +325,33 @@ defineExpose({
     </div>
   </section>
   <p class="footnote">模拟交易 · 金额单位：元。可卖份额按 T+0／T+1 规则计算，收益已计入模拟费用。</p>
+  <p v-if="account.daily_return?.day" class="footnote">
+    收益日期：{{
+      account.daily_return.day
+    }}。当日收益以昨收为基准，计入当日买卖、费用与分红；总收益包含已清仓标的。
+  </p>
 </template>
 <style scoped>
 .account-panel {
   scroll-margin-top: 74px;
+}
+.holding-daily-profit {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.holding-daily-profit b {
+  margin-left: auto;
+  font: 500 16px var(--font-numeric);
+}
+.holding-profit .profit-label {
+  color: var(--muted);
+  font-size: 10px;
+  margin: 0 0 3px;
 }
 .record-symbol-meta {
   display: flex;

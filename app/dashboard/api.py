@@ -54,6 +54,7 @@ from app.dashboard.post_close import post_close_payload, post_close_window
 from app.dashboard.live_candle import live_candle_payload
 from app.dashboard.trade_positions import annotate_trade_positions
 from app.dashboard.trade_intraday import recorded_intraday
+from app.dashboard.daily_returns import daily_returns
 
 logger = logging.getLogger(__name__)
 
@@ -747,9 +748,11 @@ def create_app(
     @app.get("/api/v1/account")
     def account():
         with db.connect() as conn:
+            conn.execute("BEGIN")
             now = clock()
             data = snapshot(conn, now)
             data["display_day"] = expected_day(calendar, now)
+            data["daily_return"] = daily_returns(conn, calendar, now, data)
             data["equity"] = [
                 {"at": r["at"], "nav": yuan(r["nav"]), "stale": bool(r["stale"])}
                 for r in conn.execute(

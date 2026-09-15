@@ -166,7 +166,7 @@ docker compose up -d --no-deps --wait worker
 | `GET /etfs/{symbol}/intraday` | 独立分时展示：分钟价格、昨收、来源交易日、更新时间与延迟状态；默认接受已知活跃 ETF。传入 `day=YYYY-MM-DD` 时只读该日已保留报价，允许查询有成交记录的历史 ETF，缺失返回空点集 | 否 |
 | `GET /signals` | 默认按执行方式返回当前目标；`mode=daily` 查看收盘计划，`mode=live` 返回实时目标、新鲜度及 `execution` 盘中动作／等待原因 | 否 |
 | `GET /signals/history`、`GET /signals/history/{plan_id}`、`GET /signals/{symbol}/chart` | 信号历史与图表 | 否 |
-| `GET /account` | 现金、持仓、可卖数量、收益及净值序列 | 否 |
+| `GET /account` | 现金、持仓、可卖数量、今日收益及净值序列 | 否 |
 | `GET /orders`、`GET /trades`、`GET /actions` | 订单、成交、分红折算；`/trades` 支持 `symbol=sh510300` 按标的筛选并返回对应总数，分页最多 200 条 | 否 |
 | `GET /t-strategy` | 做 T 周期、后台状态、当前持仓及展示交易日已卖出 ETF 的分钟支撑压力、轮次及执行等待原因；只读，不发起行情下载或交易 | 否 |
 | `GET /runs` | 运行日志 | 是 |
@@ -179,6 +179,10 @@ docker compose up -d --no-deps --wait worker
 ETF 列表及详情包含 `focus_group/focus_label/amount20/turnover20/turnover_reason/representative/representative_symbol/liquidity_rank/focus_reason`。`turnover20` 使用比例值（0.01 = 1%），缺失为 null，`sort=turnover20` 降序且缺失排最后。列表 `focus` 提供 `minimum_amount/minimum_turnover` 两项门槛及分组、代表、换手率不足和待齐数量。代表在所选候选范围内满足两项门槛后确定，再应用搜索和分页，搜索非代表不会让它成为临时代表。`PATCH /config` 可保存两项下限，0 分别表示不限制。
 
 ### 买卖观察
+
+投资总览资产摘要展示「今日总收益」，当前持仓表及手机持仓卡片展示每只 ETF 的「今日收益」。`GET /account` 的 `daily_return` 返回 `day/is_today/pnl/closed_pnl/warning`，每个持仓返回 `daily_pnl/daily_pnl_warning`，金额单位为元。收益日期沿用 `display_day`：休市及开盘前展示最近已开盘交易日并明确标为「最近交易日收益」。
+
+单只 ETF 当日收益＝当日末持仓按最新行情估值＋当日卖出净收入－当日买入含费支出＋当日除息确认的分红权益－日初份额按上一交易日未复权收盘价估值。总收益包含当日已清仓标的，买卖和做 T 均计入费用；初始资金、资金调整及此前已计提分红的到账不重复计为收益。昨收优先使用上一交易日未复权日 K，其次是该日收盘附近的已采集报价；普通交易日可使用当日行情的昨收字段，除息／折算日必须有真实未复权昨收，不能使用调整后的参考价。缺少必要行情、昨收或核算依据时显示「—」及原因，总额不以部分已知收益冒充完整值；同日延迟行情保留估值并提示待更新。接口在同一个只读事务内计算，不改写账户、交易或净值，也不影响 worker 执行。仅此收益展示更新时重建并更新 dashboard，worker 保持运行。
 
 非交易日及下一交易日开盘前，页面展示最近一个已开盘交易日的信息，并标明具体日期。`GET /status`、`GET /account` 的 `display_day` 与 `GET /t-strategy` 的 `day` 使用同一交易日历口径；后者的 `at` 保留实际读取时间。资产走势截至该展示交易日，后台估值记录仍完整保留。分时买卖点保留该交易日已卖出的 ETF，分钟 T 参考价使用该日最后已采集的完整分钟结构，休市期间不因时间流逝消失，开盘后切换新交易日。交易执行仍使用实际时间和原有新鲜度检查；缺失的分钟行情不补造。
 

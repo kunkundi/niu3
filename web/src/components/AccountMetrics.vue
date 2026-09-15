@@ -12,6 +12,18 @@ defineProps({ account: { type: Object, required: true } })
         ><strong :class="changeClass(account.return_pct)">{{ pct(account.return_pct, true) }}</strong>
       </div>
     </section>
+    <section class="metric-card daily-metric">
+      <div class="metric-label">
+        {{ account.daily_return?.is_today === false ? '最近交易日总收益' : '今日总收益' }}
+        <span class="metric-unit">{{ account.daily_return?.day?.slice(5) || '—' }}</span>
+      </div>
+      <div class="metric-number" :class="changeClass(account.daily_return?.pnl)">
+        {{ signedMoney(account.daily_return?.pnl) }}
+      </div>
+      <div class="metric-bottom" :class="{ amberText: account.daily_return?.warning }">
+        <span>{{ account.daily_return?.warning || '含当日买卖、费用与分红' }}</span>
+      </div>
+    </section>
     <section class="metric-card profit-metric">
       <div class="metric-label">持仓浮动盈亏</div>
       <div class="metric-number" :class="changeClass(account.unrealized)">
@@ -42,7 +54,7 @@ defineProps({ account: { type: Object, required: true } })
 </template>
 <style scoped>
 .account-metrics {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0;
   margin-bottom: 0;
   background: var(--panel);
@@ -92,10 +104,17 @@ defineProps({ account: { type: Object, required: true } })
   .account-metrics .metric-card {
     padding: 8px 10px;
   }
-  .account-metrics .metric-card:nth-child(2) {
+  .account-metrics .daily-metric {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .account-metrics .metric-card:nth-child(3) {
     border-right: 0;
   }
-  .account-metrics .metric-card:nth-child(-n + 2) {
+  .account-metrics .main-metric,
+  .account-metrics .profit-metric {
     border-bottom: 1px solid var(--line);
   }
   .account-metrics .big-number,
