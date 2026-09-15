@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MINIMUM_AMOUNT = Decimal("100000000")
 PA_HISTORY_BARS = 250
 RETIRED_RISK_FIELDS = {"drawdown_stop"}
+RETIRED_EXECUTION_FIELDS = {"slippage_bps"}
 
 
 def data_dir() -> Path:
@@ -40,7 +41,6 @@ class Settings(BaseModel):
     trailing_stop: Decimal = Field(default=Decimal("0.08"), gt=0, lt=1)
     commission_rate: Decimal = Field(default=Decimal("0.0001"), ge=0, le=Decimal("0.01"))
     minimum_commission: Decimal = Field(default=Decimal("0"), ge=0, le=100)
-    slippage_bps: Decimal = Field(default=Decimal("5"), ge=0, le=100)
     participation: Decimal = Field(default=Decimal("0.01"), gt=0, le=Decimal("0.01"))
     quote_max_age: int = Field(default=90, ge=10, le=90)
     coverage_required: Decimal = Field(default=Decimal("0.95"), ge=Decimal("0.8"), le=1)
@@ -68,11 +68,12 @@ class Settings(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def ignore_retired_risk_fields(cls, values):
+    def ignore_retired_fields(cls, values):
         # Historical configurations and frozen orders remain readable without
         # rewriting their evidence. Retired fields no longer affect execution.
         if isinstance(values, dict):
-            return {key: value for key, value in values.items() if key not in RETIRED_RISK_FIELDS}
+            retired = RETIRED_RISK_FIELDS | RETIRED_EXECUTION_FIELDS
+            return {key: value for key, value in values.items() if key not in retired}
         return values
 
     @field_validator("focus_categories", "focus_markets")
@@ -106,7 +107,6 @@ CONFIG_LABELS = {
     "trailing_stop": "高点回撤止损",
     "commission_rate": "佣金比例",
     "minimum_commission": "最低佣金（元）",
-    "slippage_bps": "滑点（基点）",
     "participation": "新增成交量参与率",
     "quote_max_age": "行情有效期（秒）",
     "coverage_required": "数据覆盖率门槛",

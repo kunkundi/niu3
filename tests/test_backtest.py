@@ -1,12 +1,12 @@
 import unittest
 
 from app.core.config import Settings
-from scripts.backtest_etfs import simulate
+from scripts.backtest_etfs import execution_price, simulate
 
 
 class DailyScenarioBacktestTests(unittest.TestCase):
     def setUp(self):
-        self.config = Settings(commission_rate=0, minimum_commission=0, slippage_bps=0)
+        self.config = Settings(commission_rate=0, minimum_commission=0)
         self.instrument = {"settlement": 0, "tick": 1000, "lot_size": 100}
 
     def bar(self, day, opening, high, low, close):
@@ -48,16 +48,25 @@ class DailyScenarioBacktestTests(unittest.TestCase):
         gap = [self.bar("2026-01-02", 12, 12, 9, 10)]
         self.assertEqual(simulate(gap, {"2026-01-02": self.plan()}, self.instrument, self.config)["entries"], 0)
 
-    def test_slippage_rechecks_reward_risk_and_fee_accounting_reconciles(self):
+    def test_tick_alignment_rechecks_reward_risk_and_fee_accounting_reconciles(self):
         bars = [self.bar("2026-01-02", 10, 10, 10, 10)]
-        costs = Settings(commission_rate="0.0001", slippage_bps=5)
-        rejected = simulate(bars, {"2026-01-02": self.plan(target=11.5)}, self.instrument, costs)
+        costs = Settings(commission_rate="0.0001")
+        accepted = simulate(bars, {"2026-01-02": self.plan(target=11.5)}, self.instrument, costs)
+        self.assertEqual(accepted["entries"], 1)
+        self.assertTrue(accepted["open_position"])
+        off_tick = [{**bars[0], "factor": 1.00005}]
+        rejected = simulate(off_tick, {"2026-01-02": self.plan(target=11.5)}, self.instrument, costs)
         self.assertEqual(rejected["entries"], 0)
         self.assertEqual(rejected["counters"]["rejected_after_cost"], 1)
         bars.append(self.bar("2026-01-05", 12, 12, 12, 12))
         run = simulate(bars, {"2026-01-02": self.plan()}, self.instrument, costs)
+        self.assertEqual(run["trades"][0]["entry_price"], 10)
         self.assertAlmostEqual(run["ending_nav"] - 100000, sum(t["net_pnl"] for t in run["trades"]))
         self.assertGreater(run["fees"], 0)
+
+    def test_backtest_does_not_add_or_subtract_slippage(self):
+        for side in ("BUY", "SELL"):
+            self.assertAlmostEqual(execution_price(.842, 1, .001, side), .842)
 
     def test_future_prices_cannot_change_earlier_equity_and_same_day_signals_are_rejected(self):
         bars = [self.bar("2026-01-02", 10, 10.5, 9.5, 10.2)]

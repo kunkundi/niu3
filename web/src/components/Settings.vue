@@ -75,10 +75,10 @@ const groups = [
     keys: ['minimum_bars', 'retain_rank', 'stop_loss', 'trailing_stop'],
   },
   {
-    title: '成交费用与滑点',
-    description: '印花税和单列过户费为 0。',
+    title: '成交费用与撮合',
+    description: '按卖一价买入、买一价卖出，不额外叠加滑点。印花税和单列过户费为 0。',
     advanced: true,
-    keys: ['commission_rate', 'minimum_commission', 'slippage_bps', 'participation'],
+    keys: ['commission_rate', 'minimum_commission', 'participation'],
   },
   {
     title: '数据与调度',
@@ -340,7 +340,7 @@ function showInvalid(event) {
                   :step="
                     percentFields.has(key)
                       ? '0.01'
-                      : ['slippage_bps', 'minimum_commission', 'pa_min_rr'].includes(key)
+                      : ['minimum_commission', 'pa_min_rr'].includes(key)
                         ? '0.1'
                         : '1'
                   "

@@ -19,9 +19,9 @@ def fee_for(gross: int, config: Settings) -> int:
     return units(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
-def fill_price(quote: Quote, side: str, tick: int, config: Settings) -> int:
+def fill_price(quote: Quote, side: str, tick: int) -> int:
+    """Use the executable book side, aligned to its tick without added slippage."""
     raw = Decimal(quote.ask if side == "BUY" else quote.bid)
-    raw *= 1 + config.slippage_bps / 10000 * (1 if side == "BUY" else -1)
     rounding = ROUND_CEILING if side == "BUY" else ROUND_FLOOR
     return int((raw / tick).to_integral_value(rounding=rounding)) * tick
 
@@ -241,9 +241,9 @@ class Engine:
                 ).fetchone()
                 config = Settings.model_validate_json(config_row[0])
                 blocked = self._blocker(conn, order, instrument, quote, now, current_config)
-                price = fill_price(quote, order["side"], instrument.tick, config)
+                price = fill_price(quote, order["side"], instrument.tick)
                 if not blocked and (price <= 0 or price > quote.upper or price < quote.lower):
-                    blocked = "滑点后价格超出涨跌停边界"
+                    blocked = "盘口取整价格超出涨跌停边界"
                 previous = conn.execute(
                     "SELECT payload FROM quotes WHERE symbol=? AND (at<? OR (at=? AND id<?)) "
                     "ORDER BY at DESC,id DESC LIMIT 1",

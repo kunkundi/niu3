@@ -101,7 +101,7 @@ def signal(conn, plan, instrument, quote, config, now, kind, cycle=None):
             and bar["low"] > result["support_stop"]
         )
         lower, upper = max(support + 2 * tolerance, bar["close"] - tolerance), resistance + 2 * tolerance
-        executable = fill_price(quote, "SELL", instrument.tick, config)
+        executable = fill_price(quote, "SELL", instrument.tick)
     else:
         reference = sell_reference(conn, cycle)
         if not reference or reference.get("policy") != POLICY:
@@ -136,7 +136,7 @@ def signal(conn, plan, instrument, quote, config, now, kind, cycle=None):
             max(stop + instrument.tick, support - tolerance),
             min(support + 2 * tolerance, bar["close"] + tolerance),
         )
-        executable = fill_price(quote, "BUY", instrument.tick, config)
+        executable = fill_price(quote, "BUY", instrument.tick)
     result.update(price_min=lower, price_max=upper)
     if not reversal:
         return result
@@ -162,9 +162,9 @@ def execution_problem(conn, evidence, instrument, quote, config, now, kind):
         return latest["message"]
     if latest["input_sha256"] != evidence.get("input_sha256"):
         return "5 分钟 K 已更新，等待新的分钟决策"
-    price = fill_price(quote, "SELL" if kind == "t_sell" else "BUY", instrument.tick, config)
+    price = fill_price(quote, "SELL" if kind == "t_sell" else "BUY", instrument.tick)
     if not evidence["price_min"] <= price <= evidence["price_max"]:
-        return "滑点后价格不在分钟做 T 执行区间"
+        return "盘口取整价格不在分钟做 T 执行区间"
     if kind == "t_buy" and quote.ask <= evidence["support_stop"]:
         return "本轮分钟支撑已失效"
     return ""

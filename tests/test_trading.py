@@ -1,13 +1,15 @@
+import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
 
+from app.core.config import Settings
 from app.core.types import iso, units
-from app.storage.db import Database, get_state, put_instrument, set_state
+from app.storage.db import Database, get_state, put_instrument, set_state, settings
 from app.trading.account import reconcile, snapshot
 from app.trading.actions import apply_actions, ingest_actions
-from app.trading.engine import Engine
+from app.trading.engine import Engine, fill_price
 from tests.helpers import Fixture, at
 
 
@@ -18,7 +20,7 @@ class TradingTests(unittest.TestCase):
     def tearDown(self):
         self.f.close()
 
-    def test_buy_uses_next_quote_fee_slippage_and_no_duplicate_after_restart(self):
+    def test_buy_uses_next_ask_without_slippage_and_no_duplicate_after_restart(self):
         self.f.quote(at() - timedelta(seconds=10))
         self.f.order()
         self.f.engine.match(at())
@@ -26,7 +28,7 @@ class TradingTests(unittest.TestCase):
         self.f.quote(at() + timedelta(seconds=30), volume=2_000_000)
         self.f.engine.match(at() + timedelta(seconds=30))
         fill = self.f.rows("fills")[0]
-        self.assertEqual(fill["price"], units("1.001"))
+        self.assertEqual(fill["price"], units("1.000"))
         self.assertEqual(fill["fee"], units(".10"))
         self.assertEqual(fill["quantity"], 1000)
         Engine(self.f.db, self.f.calendar).match(at() + timedelta(seconds=35))
@@ -36,6 +38,56 @@ class TradingTests(unittest.TestCase):
             self.assertEqual(
                 snapshot(conn, at())["cash_units"], units("100000") - fill["gross"] - fill["fee"]
             )
+
+    def test_book_prices_only_round_when_not_aligned_to_the_tick(self):
+        quote = self.f.quote(bid=units(".841"), ask=units(".842"))
+        self.assertEqual(fill_price(quote, "BUY", units(".001")), units(".842"))
+        self.assertEqual(fill_price(quote, "SELL", units(".001")), units(".841"))
+        off_tick = replace(quote, ask=units(".8424"), bid=units(".8416"))
+        self.assertEqual(fill_price(off_tick, "BUY", units(".001")), units(".843"))
+        self.assertEqual(fill_price(off_tick, "SELL", units(".001")), units(".841"))
+
+    def test_sell_uses_bid_without_deducting_slippage_and_keeps_fees(self):
+        with self.f.db.transaction() as conn:
+            put_instrument(conn, replace(self.f.instrument, settlement=0))
+        self.f.buy()
+        self.f.order("SELL", when=at() + timedelta(minutes=1))
+        later = at() + timedelta(seconds=90)
+        self.f.quote(later, price="1.011", bid=units("1.010"), ask=units("1.012"), volume=3_000_000)
+        self.f.engine.match(later)
+        fill = self.f.rows("fills")[-1]
+        self.assertEqual(fill["side"], "SELL")
+        self.assertEqual(fill["price"], units("1.010"))
+        self.assertEqual(fill["gross"], units("1010"))
+        self.assertEqual(fill["fee"], units(".10"))
+        self.assertEqual(fill["realized"], units("9.80"))
+        with self.f.db.connect() as conn:
+            self.assertEqual(reconcile(conn), [])
+
+    def test_legacy_slippage_is_ignored_for_pending_orders_without_rewriting_history(self):
+        self.f.buy()
+        self.f.order(when=at() + timedelta(minutes=1), key="pending-legacy")
+        with self.f.db.transaction() as conn:
+            version, config = settings(conn)
+            legacy = json.dumps({**config.model_dump(mode="json"), "slippage_bps": "100"})
+            conn.execute("UPDATE configs SET payload=? WHERE id=?", (legacy, version))
+        tables = ("configs", "orders", "fills", "cash_ledger", "lots")
+        before = {table: self.f.rows(table) for table in tables}
+        restarted = Database(self.f.db.path)
+        self.assertEqual({table: self.f.rows(table) for table in tables}, before)
+        with restarted.connect() as conn:
+            self.assertNotIn("slippage_bps", settings(conn)[1].model_dump())
+        self.assertNotIn("slippage_bps", Settings.model_json_schema()["properties"])
+        later = at() + timedelta(seconds=90)
+        self.f.quote(later, bid=units("1.000"), ask=units("1.002"), volume=3_000_000)
+        Engine(restarted, self.f.calendar).match(later)
+        fills = self.f.rows("fills")
+        self.assertEqual(len(fills), 2)
+        self.assertEqual(fills[0], before["fills"][0])
+        self.assertEqual(fills[1]["price"], units("1.002"))
+        self.assertEqual(self.f.rows("configs"), before["configs"])
+        with restarted.connect() as conn:
+            self.assertEqual(reconcile(conn), [])
 
     def test_concurrent_matching_exactly_once(self):
         self.f.quote(at() - timedelta(seconds=10))
@@ -261,7 +313,7 @@ class TradingTests(unittest.TestCase):
             apply_actions(conn, at("2026-09-07T15:01:00"))
             apply_actions(conn, at("2026-09-08T09:00:00"))
         self.assertEqual(self.f.rows("actions")[0]["receivable"], units(100))
-        self.assertEqual(self.f.rows("lots")[0]["high"], units(".901"))
+        self.assertEqual(self.f.rows("lots")[0]["high"], units(".900"))
         day2 = at("2026-09-08T09:35:00")
         with self.f.db.transaction() as conn:
             set_state(conn, "actions:sh510300", {"at": iso(day2)})
@@ -299,7 +351,7 @@ class TradingTests(unittest.TestCase):
         lot = self.f.rows("lots")[0]
         self.assertEqual(lot["quantity"], 2000)
         self.assertEqual(lot["cost"], cost)
-        self.assertEqual(lot["high"], units(".5005"))
+        self.assertEqual(lot["high"], units(".5000"))
         with self.f.db.connect() as conn:
             self.assertEqual(reconcile(conn), [])
 

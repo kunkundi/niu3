@@ -27,6 +27,22 @@ class ApiTests(unittest.TestCase):
             "/api/v1/auth/login", json={"password": "niuno3-test-password-2026"}, headers=self.headers
         )
 
+    def test_retired_slippage_is_not_exposed_and_updates_are_rejected_atomically(self):
+        self.login()
+        config = self.client.get("/api/v1/config").json()
+        self.assertNotIn("slippage_bps", config["values"])
+        self.assertNotIn("slippage_bps", config["labels"])
+        self.f.order()
+        before = {table: self.f.rows(table) for table in ("configs", "orders", "cash_ledger")}
+        response = self.client.patch(
+            "/api/v1/config", json={"slippage_bps": 0, "commission_rate": 0}, headers=self.headers
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("滑点已移除", response.json()["detail"])
+        with self.assertRaisesRegex(ValueError, "滑点已移除"):
+            self.f.db.change_config({"slippage_bps": 5}, at())
+        self.assertEqual({table: self.f.rows(table) for table in before}, before)
+
     def test_viewing_workbench_is_public_but_settings_require_a_session(self):
         self.assertEqual(self.client.get("/healthz").status_code, 200)
         for path in ("/nonexistent", "/api/v1/etfs/sh999999"):
@@ -121,7 +137,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(first["items"][0]["name"], "沪深300ETF")
         self.assertEqual(second["items"][0]["name"], "沪深300ETF")
         self.assertGreater(first["items"][0]["id"], second["items"][0]["id"])
-        self.assertEqual(first["items"][0]["price"], 1.001)
+        self.assertEqual(first["items"][0]["price"], 1.000)
         self.assertTrue(first["items"][0]["reason"])
         missing_metadata = self.client.get("/api/v1/trades?symbol=sz159865").json()
         self.assertEqual(missing_metadata["total"], 1)

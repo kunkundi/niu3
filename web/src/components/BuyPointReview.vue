@@ -81,7 +81,7 @@ defineExpose({ show })
         <p class="review-method">
           {{ review.rr_enabled === false ? '入场价格上限' : '计入最低盈亏比后的入场上限' }}：{{
             money(marker.entry_ceiling, 3)
-          }}（交易时另按实际报价、最小价位及滑点复核）。
+          }}（交易时另按实际盘口及最小价位复核）。
         </p>
         <ul>
           <li v-for="reason in marker.reasons" :key="reason">{{ reason }}</li>

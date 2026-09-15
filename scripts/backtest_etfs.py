@@ -22,8 +22,8 @@ def fee(gross, config):
     return fee_for(units(gross), config) / 1_000_000
 
 
-def execution_price(price, factor, tick, side, config):
-    raw = price * factor * (1 + float(config.slippage_bps) / 10000 * (1 if side == "BUY" else -1))
+def execution_price(price, factor, tick, side):
+    raw = price * factor
     steps = math.ceil(raw / tick - 1e-9) if side == "BUY" else math.floor(raw / tick + 1e-9)
     return steps * tick / factor
 
@@ -56,7 +56,7 @@ def simulate(bars, plans, instrument, config, path="OHLC", benchmark=False):
 
         def sell(price, reason):
             nonlocal cash, position, fees, exited
-            fill = execution_price(price, factor, tick, "SELL", config)
+            fill = execution_price(price, factor, tick, "SELL")
             gross = position["quantity"] * fill
             commission = fee(gross, config)
             cash += gross - commission
@@ -90,7 +90,7 @@ def simulate(bars, plans, instrument, config, path="OHLC", benchmark=False):
             if not benchmark and price_decision(pa, price, config.pa_min_rr)["action"] != "buy":
                 counters["rejected_reference"] += 1
                 return
-            fill = execution_price(price, factor, tick, "BUY", config)
+            fill = execution_price(price, factor, tick, "BUY")
             if not benchmark and price_decision(pa, fill, config.pa_min_rr)["action"] != "buy":
                 counters["rejected_after_cost"] += 1
                 return
@@ -259,7 +259,7 @@ def run(input_path, levels_path, output_path):
             "capital_per_etf": float(config.initial_cash), "allocation": "100% independent capital, no pyramiding",
             "paths": ["OHLC", "OLHC"], "no_same_day_reentry": True,
             "price_basis": "qfq equivalent units; opening raw/qfq factor for lot/tick conversion",
-            "execution": "conditional fills on first touch, including adverse slippage and RR recheck",
+            "execution": "conditional fills on first touch, tick alignment and RR recheck; no added slippage",
             "excluded_live_controls": ["intraday quote confirmations", "depth/partial fills", "intraday T cycles", "portfolio position/exposure caps"],
             "unliquidated_end": "open holdings marked at last close; not included in closed-trade win rate",
         },

@@ -137,8 +137,8 @@ def order_problem(conn, order, instrument, quote, config, calendar, now):
             return "裸 K 结构已更新，等待新决策"
         executable = replace(
             quote,
-            ask=fill_price(quote, "BUY", instrument.tick, config),
-            bid=fill_price(quote, "SELL", instrument.tick, config),
+            ask=fill_price(quote, "BUY", instrument.tick),
+            bid=fill_price(quote, "SELL", instrument.tick),
         )
         problem = (
             execution_problem(conn, decision.get("minute_t"), instrument, quote, config, now, order["kind"])
@@ -175,7 +175,7 @@ def order_problem(conn, order, instrument, quote, config, calendar, now):
                 return "价格已反弹，等待做 T 买回门槛"
             from app.trading.engine import fee_for, fill_price
 
-            cost = order["quantity"] * fill_price(quote, "BUY", instrument.tick, config)
+            cost = order["quantity"] * fill_price(quote, "BUY", instrument.tick)
             proceeds = Decimal(sale["gross"] - sale["fee"]) * order["quantity"] / sale["quantity"]
             if cost + fee_for(cost, config) >= proceeds:
                 return "当前价差不足以覆盖模拟费用"
@@ -312,7 +312,7 @@ class IntradayTrader:
             elif trigger and not limit:
                 from app.trading.engine import fee_for, fill_price
 
-                cost = quantity * fill_price(quote, "BUY", instrument.tick, config)
+                cost = quantity * fill_price(quote, "BUY", instrument.tick)
                 proceeds = Decimal(totals["gross"] - totals["fee"]) * quantity / sell["filled"]
                 if cost + fee_for(cost, config) < proceeds:
                     order_id = self._submit(
@@ -633,7 +633,7 @@ class IntradayTrader:
                     if minute_t:
                         from app.trading.engine import fee_for, fill_price
 
-                        proceeds = quantity * fill_price(quote, "SELL", instrument.tick, config)
+                        proceeds = quantity * fill_price(quote, "SELL", instrument.tick)
                         cost = quantity * (minute_t["support"] + 2 * minute_t["tolerance"])
                         if proceeds - fee_for(proceeds, config) <= cost + fee_for(cost, config):
                             items.append({"symbol": symbol, "message": "分钟波段价差不足以覆盖模拟费用"})

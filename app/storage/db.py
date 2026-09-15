@@ -6,7 +6,7 @@ from dataclasses import replace
 from contextlib import contextmanager
 from pathlib import Path
 
-from app.core.config import DisplaySettings, Settings
+from app.core.config import DisplaySettings, RETIRED_EXECUTION_FIELDS, Settings
 from app.core.types import Instrument, Quote, iso, now_cn, units
 from app.strategies.focus import FOCUS_POLICY
 
@@ -201,6 +201,8 @@ class Database:
             )
 
     def change_config(self, payload: dict, at):
+        if RETIRED_EXECUTION_FIELDS.intersection(payload):
+            raise ValueError("额外滑点已移除，不能再配置该参数")
         with self.transaction() as conn:
             version, old = settings(conn)
             display_patch = {

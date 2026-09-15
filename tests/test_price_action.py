@@ -221,7 +221,7 @@ class PriceActionTests(unittest.TestCase):
         self.assertEqual(result["targets"], {})
         self.assertIn("交易属性待核验，暂不自动买入", row["reasons"])
 
-    def test_quote_reversal_and_slippage_are_rechecked_before_entry(self):
+    def test_quote_reversal_and_execution_price_are_rechecked_before_entry(self):
         self.confirmed()
         self.fill(self.now + timedelta(seconds=30), price=".990")
         self.assertEqual(self.f.rows("orders")[0]["filled"], 0)
