@@ -128,6 +128,23 @@ docker compose cp dashboard:/data/backup-20260907.sqlite3 ./backups/
 
 备份使用 SQLite 在线 backup API，在一致的快照中读取 WAL 数据；目标已存在则拒绝覆盖。备份含账户和登录哈希，应按私有文件保存。仅复制一个正在写入的 `.sqlite3` 文件会漏掉 WAL 中的提交。
 
+### 明确授权的历史滑点修复
+
+仅在用户明确要求修复历史模拟成交时，使用 `scripts.repair_historical_slippage`；普通部署和启动不会运行此工具。默认只读生成逐项修复清单，按保留的原始盘口和旧配置核验历史滑点，保留成交 ID、订单、时间、方向、数量与决策依据。按原订单累计佣金和可卖批次 FIFO 重建成交金额、费用、已实现盈亏、资金分录及剩余持仓成本；历史净值保留原市值及应收估值，只同步现金差额。净值高点没有历史时间戳，因此回撤基准明确按已保存的有效净值和本金重新计算，不推测未记录的盘中峰值。历史风险高点和结构价位不重放。
+
+工具拒绝缺失报价、旧价格无法解释、账本不平衡、待撮合订单、持有期间公司行动、独立风险成本调整或不匹配的估值时间线。执行前在备份副本演练，暂停 worker 后重新生成清单。以下 `26` 为本次明确核对的成交边界；其他修复必须使用实际审核的边界。
+
+```bash
+docker compose stop worker
+docker compose exec -T dashboard python -m scripts.repair_historical_slippage --through-fill-id 26 --report /data/repair-preview.json
+# 使用上一步输出的 source_sha256，报告与备份路径必须尚不存在
+docker compose exec -T dashboard python -m scripts.repair_historical_slippage --through-fill-id 26 --report /data/repair-applied.json --apply --expected-sha256 SOURCE_SHA256 --backup /data/backup-before-repair.sqlite3
+docker compose exec -T dashboard python -m scripts.audit
+docker compose up -d --no-deps --wait worker
+```
+
+写入前必须匹配清单指纹，并在数据库写锁内通过另一个只读连接生成独立完整备份，检查备份与源数据一致。只在同一事务内临时解除成交及资金更新触发器，修复后恢复原触发器、验证逐行差异、外键、数据库完整性及账本平衡；任何失败整体回滚。`ledger_repairs` 永久保存完整修改前后值、修复策略、时间和备份位置，`runs` 保存摘要；原始配置、报价、通知和交易决策保持原证据，不重发历史通知。再次运行已修复范围不再改变数据。
+
 恢复时先停止两个服务并备份原卷，使用维护容器把已核验的备份复制到卷中 `/data/niuno3.sqlite3`，移走对应旧 WAL／SHM，保留 UID 10001 的权限，再启动并运行核对。不要在 worker 运行时替换数据库；核对失败不能通过直接修改批次、资金或成交表解除。
 
 原始行情保留最近 7 天；长假期间额外保留最近交易日的全部报价，直到下一交易日开盘，避免分时图跨假期缺失。永久保留每笔成交的报价及前一成交量样本、订单最后报价和每只最新两个样本。普通任务日志保留 30 天，决策和控制日志、完整计划输入、净值和交易账本保留。清理在收盘后或休市日每天至多一次执行；SQLite 复用空闲页，不在盘中 VACUUM。
