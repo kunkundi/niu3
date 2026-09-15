@@ -1,14 +1,13 @@
 import { intradayTradeGroups, layoutTradeMarkers } from './trade-observation.js'
 import { priceLineLayout } from './signal-chart.js'
+import { intradayLinePoints, intradayLinePrice, intradayLinePath } from './intraday-line.js'
 
 const quantityFormat = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
 const amountFormat = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export function tradeIntradayChart(data, events, day, width = 300, levels = []) {
+export function tradeIntradayChart(data, events, day, width = 300, levels = [], minHeight = 124) {
   if (!data || data.day !== day || !data.points?.length || !(Number(data.previous_close) > 0)) return null
-  const points = data.points.filter(
-    (point) => Number(point.price) > 0 && point.minute >= 0 && point.minute <= 240,
-  )
+  const points = intradayLinePoints(data)
   if (!points.length) return null
   const references = levels.filter((level) => Number.isFinite(level.value) && level.value > 0)
   const groups = events
@@ -20,7 +19,7 @@ export function tradeIntradayChart(data, events, day, width = 300, levels = []) 
         event,
       })),
     )
-  let height = 124
+  let height = Math.max(124, minHeight)
   const top = 22,
     inset = 8
   const previous = Number(data.previous_close)
@@ -29,7 +28,6 @@ export function tradeIntradayChart(data, events, day, width = 300, levels = []) 
       previous * 0.002,
       0.001,
       ...points.map((point) => Math.abs(Number(point.price) - previous)),
-      ...groups.map((group) => Math.abs(group.price - previous)),
       ...references.map((level) => Math.abs(level.value - previous)),
     ) * 1.1
   const x = (minute) => inset + (minute / 240) * (width - inset * 2)
@@ -46,28 +44,37 @@ export function tradeIntradayChart(data, events, day, width = 300, levels = []) 
     )
     const quantity = `${quantityFormat.format(group.quantity)} 份`
     const amount = `${amountFormat.format(gross)} 元`
+    const execution = `成交${group.items.length > 1 ? '均' : ''}价 ${group.price.toFixed(3)} 元`
     return {
       ...group,
       gross,
+      linePrice: intradayLinePrice(points, group.timestamp),
       label: `${action} ${group.time}`,
-      labelDetails: [quantity, amount],
+      labelDetails: [execution, quantity, amount],
       labelWidth: Math.min(
         width - 4,
-        Math.max(group.label === 'T' ? 132 : 96, quantity.length * 6 + 10, amount.length * 6 + 10),
+        Math.max(
+          group.label === 'T' ? 132 : 112,
+          execution.length * 6 + 10,
+          quantity.length * 6 + 10,
+          amount.length * 6 + 10,
+        ),
       ),
-      labelHeight: 40,
+      labelHeight: 54,
       leaderDash: '3 3',
-      title: `${group.event.name} ${day} ${group.time} ${action} ${quantity}，成交金额 ${amount}，成交${group.items.length > 1 ? '均' : ''}价 ${group.price.toFixed(3)} 元，查看成交详情`,
+      title: `${group.event.name} ${day} ${group.time} ${action} ${quantity}，成交金额 ${amount}，${execution}；标记按成交时间贴合分时线，查看成交详情`,
     }
   })
+  const located = labels.filter((label) => label.linePrice !== null)
+  const unplaced = labels.filter((label) => label.linePrice === null)
   let anchors
   // Keep ordinary cards compact; add space only when every full callout cannot fit.
   // Never silently drop a transaction label because several executions are close together.
-  for (let attempt = 0; attempt <= labels.length; attempt++) {
-    anchors = labels.map((label) => ({
+  for (let attempt = 0; attempt <= located.length; attempt++) {
+    anchors = located.map((label) => ({
       ...label,
       x: x(label.minute) / width,
-      y: y(label.price) / height,
+      y: y(label.linePrice) / height,
       labelTop: label.side === 'BUY' ? height - label.labelHeight - 2 : 2,
     }))
     const placed = layoutTradeMarkers(
@@ -75,20 +82,14 @@ export function tradeIntradayChart(data, events, day, width = 300, levels = []) 
       width,
       height,
     )
-    if (placed.length === anchors.length || attempt === labels.length) break
-    height += 44
+    if (placed.length === anchors.length || attempt === located.length) break
+    height += Math.max(44, ...located.map((label) => label.labelHeight + 4))
   }
-  let lastMinute = null
-  const path = points
-    .map((point) => {
-      const command = lastMinute === null || point.minute - lastMinute > 2 ? 'M' : 'L'
-      lastMinute = point.minute
-      return `${command}${x(point.minute)},${y(Number(point.price))}`
-    })
-    .join(' ')
+  const plotted = points.map((point) => ({ ...point, x: x(point.minute), y: y(point.price) }))
   return {
-    path,
+    path: intradayLinePath(plotted),
     anchors,
+    unplaced,
     references: priceLineLayout(references, previous - spread, previous + spread, top, height - top, 18).map(
       (line) => ({ ...line, x: x(line.minute) }),
     ),
@@ -100,6 +101,6 @@ export function tradeIntradayChart(data, events, day, width = 300, levels = []) 
     low: previous - spread,
     top,
     bottom: height - top,
-    last: { ...points.at(-1), x: x(points.at(-1).minute), y: y(Number(points.at(-1).price)) },
+    last: plotted.at(-1),
   }
 }

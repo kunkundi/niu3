@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
-import { layoutTradeMarkers } from '../trade-observation.js'
+import { layoutTradeMarkers, tradeMarkerConnector } from '../trade-observation.js'
 const props = defineProps({ anchors: { type: Array, default: () => [] } })
 defineEmits(['select'])
 const root = ref(null),
@@ -27,13 +27,9 @@ const placed = computed(() =>
   ),
 )
 function connector(marker) {
-  const cx = marker.left + marker.labelWidth / 2,
-    cy = marker.top + marker.labelHeight / 2,
-    dx = marker.x - cx,
-    dy = marker.y - cy,
-    scale = Math.max(Math.abs(dx) / (marker.labelWidth / 2), Math.abs(dy) / (marker.labelHeight / 2))
-  // Stop at the label's edge so transparent letters are not crossed by their own leader.
-  return scale > 1 ? `M${marker.x} ${marker.y}L${cx + dx / scale} ${cy + dy / scale}` : ''
+  return tradeMarkerConnector(marker)
+    .map((point, index) => `${index ? 'L' : 'M'}${point.x} ${point.y}`)
+    .join('')
 }
 </script>
 <template>

@@ -84,10 +84,73 @@ export function tradeGroups(items = [], mode = 'daily') {
 }
 
 export function intradayTradeGroups(items, data) {
-  const last = data?.points?.at(-1)?.minute
-  return tradeGroups(items, 'intraday').filter(
-    (g) => g.day === data?.day && g.minute !== null && Number.isFinite(last) && Math.floor(g.minute) <= last,
-  )
+  return tradeGroups(
+    (items || []).filter((item) => !data?.symbol || item.symbol === data.symbol),
+    'intraday',
+  ).filter((g) => g.day === data?.day && g.minute !== null)
+}
+
+export function tradeMarkerConnector(marker) {
+  const cx = marker.left + marker.labelWidth / 2,
+    cy = marker.top + marker.labelHeight / 2,
+    dx = marker.x - cx,
+    dy = marker.y - cy,
+    scale = Math.max(Math.abs(dx) / (marker.labelWidth / 2), Math.abs(dy) / (marker.labelHeight / 2))
+  // Stop at the label edge so its text is not crossed by its own leader.
+  return scale > 1
+    ? [
+        { x: marker.x, y: marker.y },
+        { x: cx + dx / scale, y: cy + dy / scale },
+      ]
+    : []
+}
+
+function untangleTradeLabels(markers) {
+  const center = (m) => ({ x: m.left + m.labelWidth / 2, y: m.top + m.labelHeight / 2 })
+  const cross = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+  const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
+  // Keep neighboring executions in time order instead of letting the greedy
+  // collision search send an earlier label across all the later executions.
+  for (const side of ['BUY', 'SELL']) {
+    const ordered = markers
+      .filter((m) => m.labelDetails?.length && m.side === side)
+      .sort((a, b) => a.x - b.x || a.y - b.y)
+    const slots = ordered
+      .map(({ left, top }) => ({ left, top }))
+      .sort((a, b) => a.left - b.left || a.top - b.top)
+    ordered.forEach((marker, index) => Object.assign(marker, slots[index]))
+  }
+  // All detailed labels occupy equal-sized slots. Swapping two slots preserves
+  // label/point clearance. Uncrossing strictly shortens the total leader length,
+  // so repeat until no crossing remains without moving any execution anchor.
+  let changed
+  do {
+    changed = false
+    for (let i = 0; i < markers.length; i++) {
+      const a = markers[i]
+      if (!a.labelDetails?.length) continue
+      for (let j = i + 1; j < markers.length; j++) {
+        const b = markers[j]
+        if (!b.labelDetails?.length) continue
+        const ac = center(a),
+          bc = center(b)
+        if (
+          cross(a, ac, b) * cross(a, ac, bc) < 0 &&
+          cross(b, bc, a) * cross(b, bc, ac) < 0 &&
+          distance(a, bc) + distance(b, ac) < distance(a, ac) + distance(b, bc) - 1e-8
+        ) {
+          const left = a.left,
+            top = a.top
+          a.left = b.left
+          a.top = b.top
+          b.left = left
+          b.top = top
+          changed = true
+        }
+      }
+    }
+  } while (changed)
+  return markers
 }
 
 // The label may move to avoid collisions; its connector always ends at the original event.
@@ -95,12 +158,27 @@ export function layoutTradeMarkers(markers, width, height) {
   if (width < 40 || height < 36) return []
   const placed = []
   const clamp = (v, low, high) => Math.max(low, Math.min(high, v))
+  const detailed = markers.filter((marker) => marker.labelDetails?.length)
+  const detailedWidth = Math.max(18, ...detailed.map((marker) => marker.labelWidth || 22))
+  const detailedHeight = Math.max(18, ...detailed.map((marker) => marker.labelHeight || 22))
   for (const marker of [...markers].sort(
     (a, b) => Number(a.kind === 'candidate') - Number(b.kind === 'candidate') || b.x - a.x,
   )) {
     const candidate = marker.kind === 'candidate'
-    const labelWidth = marker.labelWidth >= 18 ? marker.labelWidth : candidate ? 18 : 22,
-      labelHeight = marker.labelHeight >= 18 ? marker.labelHeight : candidate ? 18 : 22
+    const labelWidth = marker.labelDetails?.length
+        ? detailedWidth
+        : marker.labelWidth >= 18
+          ? marker.labelWidth
+          : candidate
+            ? 18
+            : 22,
+      labelHeight = marker.labelDetails?.length
+        ? detailedHeight
+        : marker.labelHeight >= 18
+          ? marker.labelHeight
+          : candidate
+            ? 18
+            : 22
     if (width < labelWidth + 4 || height < labelHeight + 4) continue
     const left = clamp(marker.x - labelWidth / 2, 2, width - labelWidth - 2)
     const direction = marker.side === 'SELL' ? -1 : 1
@@ -142,7 +220,7 @@ export function layoutTradeMarkers(markers, width, height) {
     )
     if (position) placed.push({ ...marker, ...position, labelWidth, labelHeight })
   }
-  return placed
+  return untangleTradeLabels(placed)
 }
 
 export function tradeIntent(plan, row) {

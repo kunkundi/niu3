@@ -10,6 +10,7 @@ import Icon from './Icon.vue'
 import WorkbenchDialog from './WorkbenchDialog.vue'
 import { intradayTradeGroups } from '../trade-observation.js'
 import { intradayGeometry } from '../intraday-levels.js'
+import { intradayLinePrice } from '../intraday-line.js'
 const props = defineProps({
   data: { type: Object, required: true },
   compact: Boolean,
@@ -26,15 +27,23 @@ const selected = ref(null),
   showTrades = ref(true),
   tradeTape = ref(null)
 const groups = computed(() => intradayTradeGroups(props.tradeHistory?.items, props.data))
+const located = computed(() =>
+  groups.value.map((group) => ({
+    ...group,
+    linePrice: intradayLinePrice(chart.value.plotted, group.timestamp),
+  })),
+)
 const anchors = computed(() =>
   !showTrades.value
     ? []
-    : groups.value.map((g) => ({
-        ...g,
-        x: g.minute / 240,
-        y: (110 - ((g.price - chart.value.previous) / chart.value.spread) * 100) / 220,
-        title: `${g.day} ${g.time.slice(0, 5)} ${g.label} ${g.actionLabel} · ${g.items.length} 笔 · 成交${g.items.length > 1 ? '均' : ''}价 ${money(g.price, 3)} · 点击查看依据`,
-      })),
+    : located.value
+        .filter((g) => g.linePrice !== null)
+        .map((g) => ({
+          ...g,
+          x: g.minute / 240,
+          y: (110 - ((g.linePrice - chart.value.previous) / chart.value.spread) * 100) / 220,
+          title: `${g.day} ${g.time} ${g.label} ${g.actionLabel} · ${g.items.length} 笔 · 成交${g.items.length > 1 ? '均' : ''}价 ${money(g.price, 3)} · 标记按成交时间贴合分时线，点击查看依据`,
+        })),
 )
 function focusTrade(group) {
   selected.value = chart.value.plotted.reduce(
@@ -61,7 +70,7 @@ const chart = computed(() =>
     props.data,
     !props.compact && showLevels.value ? props.referenceLevels : [],
     plotHeight.value,
-    showTrades.value ? groups.value.map((g) => g.price) : [],
+    [],
     !props.compact && showTLevels.value ? props.tLevels : [],
   ),
 )
@@ -122,7 +131,7 @@ function step(event) {
       <div v-if="tradeHistory" class="intraday-display-setting">
         <label><input v-model="showTrades" type="checkbox" />显示成交 B/S/T</label>
         <TradeLegend />
-        <small>按成交时间与价格定位，点击图中标记查看依据。</small>
+        <small>标记按成交时间贴合分时线，实际成交价见成交明细；缺少连续行情时保留图下明细。</small>
       </div>
     </WorkbenchDialog>
     <div class="intraday-touch-tools" v-if="!compact">
@@ -178,8 +187,9 @@ function step(event) {
                 vector-effect="non-scaling-stroke"
               />
             </g>
-            <polyline
-              :points="chart.path"
+            <path
+              class="intraday-price-line"
+              :d="chart.path"
               fill="none"
               :stroke="
                 compact
@@ -225,6 +235,12 @@ function step(event) {
         </div>
       </div>
     </div>
+    <p
+      v-if="!compact && showTrades && located.some((group) => group.linePrice === null)"
+      class="intraday-unplaced-note"
+    >
+      部分成交时刻暂无连续行情，暂未在曲线上定位，可查看下方成交明细。
+    </p>
     <TradeTape
       v-if="!compact && tradeHistory"
       ref="tradeTape"
@@ -237,6 +253,11 @@ function step(event) {
   </div>
 </template>
 <style scoped>
+.intraday-unplaced-note {
+  margin: 6px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
 .intraday-display-setting {
   display: grid;
   gap: 12px;

@@ -1,6 +1,7 @@
 import { STRATEGY_LEVELS, priceLineLayout } from './signal-chart.js'
 import { prepareCandles } from './candles.js'
 import { preparePriceAction } from './price-action/index.js'
+import { intradayLinePoints, intradayLinePath } from './intraday-line.js'
 
 const unavailable = (message) => ({ levels: [], message })
 const validPrice = (value) => Number.isFinite(Number(value)) && Number(value) > 0
@@ -80,6 +81,7 @@ export function nearbyIntradayLevels(data, levels = []) {
 // Keep all active T references and only nearby daily levels. Label positions may
 // move for legibility, but their price lines and minute anchors cannot.
 export function intradayGeometry(data, levels = [], height = 220, tradePrices = [], tLevels = []) {
+  const points = intradayLinePoints(data)
   const previous = Number(data.previous_close)
   const references = [
     ...nearbyIntradayLevels(data, levels),
@@ -89,13 +91,13 @@ export function intradayGeometry(data, levels = [], height = 220, tradePrices = 
     Math.max(
       previous * 0.002,
       0.001,
-      ...(data.points || []).map((p) => Math.abs(Number(p.price) - previous)),
+      ...points.map((p) => Math.abs(p.price - previous)),
       ...tradePrices.filter(validPrice).map((price) => Math.abs(Number(price) - previous)),
       ...references.map((level) => Math.abs(level.value - previous)),
     ) * 1.1
   const low = previous - spread,
     high = previous + spread
-  const plotted = (data.points || []).map((point) => ({
+  const plotted = points.map((point) => ({
     ...point,
     x: (point.minute / 240) * 600,
     y: 110 - ((Number(point.price) - previous) / spread) * 100,
@@ -106,7 +108,7 @@ export function intradayGeometry(data, levels = [], height = 220, tradePrices = 
     low,
     high,
     plotted,
-    path: plotted.map((p) => `${p.x},${p.y}`).join(' '),
+    path: intradayLinePath(plotted),
     references: priceLineLayout(references, low, high, 10, 210, (20 * 220) / Math.max(height, 1)),
   }
 }

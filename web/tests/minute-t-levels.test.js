@@ -239,7 +239,7 @@ test("today's actual sellers remain visible after closing, while held sellers ap
   assert.deepEqual(securities, original)
 })
 
-test('real T fills retain their actual execution coordinates and explicit T action labels', () => {
+test('real T fills retain actual prices and explicit T labels while locating on the minute line', () => {
   const events = recentTradeEvents([
     {
       id: 1,

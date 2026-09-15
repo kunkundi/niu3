@@ -41,7 +41,7 @@ test('partial fills group by side and exchange day with quantity weighted prices
   assert.equal(groups[1].tone, 'sell')
   assert.equal(tradeGroups([...items, { ...items[0], price: null }]).length, 2)
 })
-test('intraday marks only matching dates, market hours, and minutes covered by the chart', () => {
+test('intraday groups retain same-day market-hour fills even beyond available chart samples', () => {
   const data = {
     day: '2026-09-10',
     previous_close: 1,
@@ -61,7 +61,7 @@ test('intraday marks only matching dates, market hours, and minutes covered by t
   )
   assert.deepEqual(
     groups.map((g) => g.items[0].id),
-    [3],
+    [3, 4],
   )
   assert.equal(intradayTradeGroups([], {}).length, 0)
   const chart = intradayGeometry(

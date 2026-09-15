@@ -1,4 +1,4 @@
-"""Read-only minute samples for the selected execution date, from recorded quotes."""
+"""Read-only source-timestamp samples for the selected execution date."""
 
 import json
 from datetime import datetime, time, timedelta
@@ -28,16 +28,18 @@ def recorded_intraday(conn, symbol, day, calendar, now):
                     or not quote.fresh(dt(quote.fetched_at))
                 ):
                     continue
-                samples[stamp.strftime("%H:%M")] = quote
+                # Keep every source timestamp, including changes within a minute.
+                # Repeated observations at the same instant use the last valid row.
+                samples[stamp] = quote
             except (ValueError, TypeError, KeyError, ArithmeticError):
                 continue
-    quotes = list(samples.values())
+    quotes = [samples[stamp] for stamp in sorted(samples)]
     previous = quotes[-1].previous_close if quotes else None
     # A conflicting previous close cannot silently distort the selected day's scale.
     points = [
         {
-            "time": dt(quote.at).strftime("%H:%M"),
-            "minute": trading_minute(dt(quote.at).strftime("%H%M")),
+            "time": dt(quote.at).astimezone(TZ).strftime("%H:%M:%S"),
+            "minute": trading_minute(dt(quote.at).astimezone(TZ).strftime("%H%M")),
             "price": yuan(quote.last),
             "at": quote.at,
         }

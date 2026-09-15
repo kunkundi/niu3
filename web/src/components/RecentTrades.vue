@@ -170,7 +170,7 @@ onUnmounted(() => {
     </div>
     <footer v-if="securities.length && view === 'charts'" class="recent-footer">
       <span
-        >当前持仓及{{ displayDayLabel }}卖出 · 可切换历史成交日 · 成交按实际时间与价格定位（北京时间）
+        >当前持仓及{{ displayDayLabel }}卖出 · 可切换历史成交日 · 标记按北京时间贴合分时线，实际成交价见明细
         <span v-if="total > items.length"> · 仅含最近 {{ items.length }} 笔成交</span>
       </span>
       <button v-if="securities.length > chartLimit" class="text-button" @click="chartLimit += 4">
