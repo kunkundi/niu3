@@ -124,8 +124,11 @@ main {
   min-height: 42px;
   padding: 0 14px;
 }
-.account-panel .table-scroll {
-  max-height: 460px;
+@media (min-width: 701px) {
+  /* Phone records grow as cards; only desktop tables use an inner scroller. */
+  .account-panel .table-scroll {
+    max-height: 460px;
+  }
 }
 .holdings-table th {
   padding-block: 9px;
@@ -234,7 +237,12 @@ main {
 }
 .signal-screen main {
   max-width: none;
-  padding: 8px 12px;
+}
+@media (min-width: 701px) {
+  /* Preserve the phone shell's bottom navigation and safe-area clearance. */
+  .signal-screen main {
+    padding: 8px 12px;
+  }
 }
 .signal-screen .page-heading {
   margin-bottom: 8px;
