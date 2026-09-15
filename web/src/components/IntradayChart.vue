@@ -147,6 +147,7 @@ function step(event) {
       <div class="intraday-plot">
         <div ref="plot" class="intraday-plot-area">
           <svg
+            class="intraday-plot-svg"
             viewBox="0 0 600 220"
             preserveAspectRatio="none"
             :tabindex="compact ? undefined : 0"
@@ -278,6 +279,7 @@ function step(event) {
 }
 .chart-settings-button {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   gap: 6px;
@@ -288,6 +290,7 @@ function step(event) {
   color: var(--text-secondary);
   background: var(--panel);
   font-size: 11px;
+  white-space: nowrap;
 }
 .chart-settings-button:hover {
   color: var(--accent-text);
@@ -370,7 +373,7 @@ function step(event) {
   flex: 1;
   min-width: 0;
 }
-svg {
+.intraday-plot-svg {
   display: block;
   width: 100%;
   height: 190px;
@@ -383,12 +386,12 @@ svg {
   color: var(--muted);
   margin-top: 6px;
 }
-.compact svg {
+.compact .intraday-plot-svg {
   width: 116px;
   height: 26px;
 }
 @media (max-width: 600px) {
-  svg {
+  .intraday-plot-svg {
     height: 155px;
   }
   .intraday-x {
@@ -419,14 +422,14 @@ svg {
   height: 0;
   min-height: 60px;
 }
-.fit svg {
+.fit .intraday-plot-svg {
   height: 100%;
 }
 .fit .intraday-x {
   flex-shrink: 0;
 }
 
-.intraday-plot-area svg {
+.intraday-plot-svg {
   touch-action: pan-y pinch-zoom;
 }
 .intraday-touch-tools {
