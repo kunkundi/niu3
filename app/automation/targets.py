@@ -5,6 +5,7 @@ import json
 from app.core.types import Bar, dec, iso
 from app.storage.db import tracked_instruments, latest_quote, settings
 from app.strategies.momentum import build_plan
+from app.strategies.profit import cooling_symbols, latest_profit_sale, reentry_setup
 
 
 def calculate_targets(db, as_of, now):
@@ -23,11 +24,8 @@ def calculate_targets(db, as_of, now):
             if row["symbol"] in universe:
                 histories.setdefault(row["symbol"], []).append(Bar(**json.loads(row["payload"])))
         held = {row[0] for row in conn.execute("SELECT DISTINCT symbol FROM lots WHERE quantity>0")}
-        cooldown = {
-            row[0]
-            for row in conn.execute("SELECT symbol FROM cooldown WHERE day=?", (now.date().isoformat(),))
-        }
-        prices, quote_times, factors = {}, {}, {}
+        cooldown = cooling_symbols(conn, now.date().isoformat(), config)
+        prices, quote_times, factors, quotes = {}, {}, {}, {}
         for symbol in universe:
             history = histories.get(symbol, [])
             latest = latest_quote(conn, symbol)
@@ -42,6 +40,7 @@ def calculate_targets(db, as_of, now):
                 prices[symbol] = dec(history[-1].close) * quote.last / quote.previous_close
                 quote_times[symbol] = quote.at
                 factors[symbol] = dec(quote.previous_close) / 1_000_000 / dec(history[-1].close)
+                quotes[symbol] = quote
     builder = build_plan
     if config.strategy_model == "price_action":
         from app.strategies.price_action import build_plan as builder
@@ -52,6 +51,32 @@ def calculate_targets(db, as_of, now):
             from app.strategies.price_action import raw_levels
 
             row["pa"]["raw"] = raw_levels(row["pa"], factors[row["symbol"]], universe[row["symbol"]].tick)
+    if config.strategy_model == "price_action":
+        from app.strategies.price_action import select_targets
+
+        with db.connect() as conn:
+            for row in plan["rows"]:
+                symbol = row["symbol"]
+                if symbol in cooldown:
+                    row["reasons"].append("当日结构止损冷却，禁止再入场")
+                if (symbol in cooldown or symbol not in quotes
+                        or not universe[symbol].tradable or not row["representative"]):
+                    continue
+                sale = latest_profit_sale(conn, symbol, now)
+                if not sale or (symbol in held and not sale.get("pending")):
+                    continue
+                pa, reason = reentry_setup(conn, universe[symbol], row.get("pa", {}), sale,
+                                          quotes[symbol], config, now, factors[symbol])
+                # A profit sale consumes the old setup; require a new intraday breakout.
+                row["eligible"] = bool(pa)
+                row["rank"] = None
+                row["reasons"] = [reason]
+                if pa:
+                    row["pa"] = pa
+                elif row["pa"].get("action") != "exit":
+                    row["pa"]["action"] = "hold"
+            plan["targets"] = select_targets(plan["rows"], held, config)
+            plan["rows"].sort(key=lambda r: (r["rank"] or 100000, r["symbol"]))
     representatives = [
         row for row in plan["rows"] if row["representative"] and universe[row["symbol"]].tradable
     ]

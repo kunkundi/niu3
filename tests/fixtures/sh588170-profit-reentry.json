@@ -1,0 +1,213 @@
+{
+  "description": "2026-09-16 retained Tencent 5m bars and quotes; minute publication timing is assumed, not an execution backtest.",
+  "symbol": "sh588170",
+  "daily_pa": {
+    "ready": true,
+    "as_of": "2026-09-15",
+    "timeframe": "day",
+    "history_bars": 250,
+    "history_limit": 250,
+    "structure_bars": 60,
+    "structure_start": "2026-06-24",
+    "background": {
+      "trend": "震荡结构",
+      "start": "2025-09-04",
+      "support": 0.893,
+      "resistance": 0.9385
+    },
+    "trend": "震荡结构",
+    "setup": "看涨 Pin Bar",
+    "signal_day": "2026-09-11",
+    "entry": 0.905,
+    "entry_stop": 0.865,
+    "target": 0.9385,
+    "entry_ceiling": 0.925,
+    "exit": null,
+    "exit_setup": "",
+    "exit_day": null,
+    "structural_stop": 0.892,
+    "support": 0.893,
+    "resistance": 1.037,
+    "t_stop": 0.88591375,
+    "t_allowed": true,
+    "evidence": {
+      "bull": {
+        "direction": "bullish",
+        "label": "看涨 Pin Bar",
+        "index": 247,
+        "knownAt": "2026-09-11",
+        "high": 0.904,
+        "low": 0.866,
+        "context": "关键位附近"
+      },
+      "bear": null,
+      "swing": {
+        "index": 242,
+        "confirmedIndex": 245,
+        "price": 0.893,
+        "type": "low",
+        "pivotIndex": 242,
+        "knownAtIndex": 245,
+        "label": "LL",
+        "level": "minor",
+        "score": 0.640023699206476,
+        "provenance": "implementation-proxy"
+      },
+      "support": {
+        "price": 0.893,
+        "zoneLow": 0.8869137500000001,
+        "zoneHigh": 0.89908625,
+        "type": "support",
+        "touches": 1,
+        "strength": 1,
+        "lastTouchedIndex": 242,
+        "label": "S1"
+      },
+      "resistance": {
+        "price": 1.037,
+        "zoneLow": 1.0309137499999999,
+        "zoneHigh": 1.04308625,
+        "type": "resistance",
+        "touches": 1,
+        "strength": 1,
+        "lastTouchedIndex": 237,
+        "label": "R1"
+      },
+      "target": {
+        "price": 0.9385,
+        "zoneLow": 0.9286526785714286,
+        "zoneHigh": 0.9483473214285714,
+        "type": "resistance",
+        "touches": 2,
+        "strength": 2,
+        "lastTouchedIndex": 234,
+        "label": "R1"
+      }
+    },
+    "input_sha256": "0d766c300a05c7b7252929061e1ca523d24da4120176501bbae26d03e3d2189d",
+    "action": "hold",
+    "raw": {
+      "entry": 905000,
+      "entry_stop": 865000,
+      "entry_ceiling": 925000,
+      "target": 938000,
+      "structural_stop": 892000,
+      "support": 893000,
+      "resistance": 1037000,
+      "t_stop": 885000
+    }
+  },
+  "minutes": [
+    {
+      "amount": null,
+      "at": "2026-09-16T09:35:00+08:00",
+      "close": 931000,
+      "high": 931000,
+      "low": 919000,
+      "open": 919000,
+      "volume": 427251600
+    },
+    {
+      "amount": null,
+      "at": "2026-09-16T09:40:00+08:00",
+      "close": 932000,
+      "high": 935000,
+      "low": 928000,
+      "open": 931000,
+      "volume": 263049300
+    },
+    {
+      "amount": null,
+      "at": "2026-09-16T09:45:00+08:00",
+      "close": 929000,
+      "high": 933000,
+      "low": 927000,
+      "open": 932000,
+      "volume": 152056100
+    },
+    {
+      "amount": null,
+      "at": "2026-09-16T09:50:00+08:00",
+      "close": 941000,
+      "high": 942000,
+      "low": 928000,
+      "open": 929000,
+      "volume": 255425800
+    },
+    {
+      "amount": null,
+      "at": "2026-09-16T09:55:00+08:00",
+      "close": 940000,
+      "high": 942000,
+      "low": 936000,
+      "open": 942000,
+      "volume": 235136900
+    },
+    {
+      "amount": null,
+      "at": "2026-09-16T10:00:00+08:00",
+      "close": 940000,
+      "high": 942000,
+      "low": 937000,
+      "open": 939000,
+      "volume": 198590100
+    },
+    {
+      "amount": null,
+      "at": "2026-09-16T10:05:00+08:00",
+      "close": 947000,
+      "high": 950000,
+      "low": 940000,
+      "open": 941000,
+      "volume": 293397200
+    },
+    {
+      "amount": null,
+      "at": "2026-09-16T10:10:00+08:00",
+      "close": 954000,
+      "high": 956000,
+      "low": 947000,
+      "open": 948000,
+      "volume": 305319000
+    }
+  ],
+  "quotes": [
+    {
+      "amount": 2009720000000000,
+      "ask": 953000,
+      "at": "2026-09-16T10:10:24+08:00",
+      "bid": 952000,
+      "fetched_at": "2026-09-16T10:10:25+08:00",
+      "high": 956000,
+      "last": 953000,
+      "low": 919000,
+      "lower": 738000,
+      "open": 919000,
+      "previous_close": 922000,
+      "source": "tencent",
+      "status": "trading",
+      "symbol": "sh588170",
+      "upper": 1106000,
+      "volume": 2144103600
+    },
+    {
+      "amount": 2056810000000000,
+      "ask": 953000,
+      "at": "2026-09-16T10:11:24+08:00",
+      "bid": 952000,
+      "fetched_at": "2026-09-16T10:11:27+08:00",
+      "high": 956000,
+      "last": 952000,
+      "low": 919000,
+      "lower": 738000,
+      "open": 919000,
+      "previous_close": 922000,
+      "source": "tencent",
+      "status": "trading",
+      "symbol": "sh588170",
+      "upper": 1106000,
+      "volume": 2193581700
+    }
+  ],
+  "prior_profit_target": 938000
+}

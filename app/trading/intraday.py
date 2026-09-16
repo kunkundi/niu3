@@ -9,6 +9,7 @@ from app.core.types import dec, dt, iso
 from app.storage.db import dump, get_state, instruments, latest_quote, set_state, settings
 from app.strategies.focus import FOCUS_POLICY
 from app.strategies.price_action import STRATEGY
+from app.strategies.profit import cooling_symbols, reentry_problem, PROFIT_REASONS
 from app.strategies.minute_t import enabled as minute_t_enabled, signal as minute_t_signal, execution_problem
 from app.trading.account import reconcile, snapshot
 
@@ -70,7 +71,7 @@ def confirm_price_action(plan, previous, config_id, config, now):
             "config": config_id,
             "strategy": STRATEGY,
             "day": now.date().isoformat(),
-            "structure": pa.get("input_sha256"),
+            "structure": pa.get("execution_sha256", pa.get("input_sha256")),
             "action": pa.get("action"),
             "selected": symbol in plan["targets"],
         }).encode()).hexdigest()
@@ -133,8 +134,11 @@ def order_problem(conn, order, instrument, quote, config, calendar, now):
         decision = json.loads(evidence[0]) if evidence else {}
         frozen = decision.get("pa", {})
         pa = (row or {}).get("pa", {})
-        if frozen.get("input_sha256") != pa.get("input_sha256"):
+        if (frozen.get("input_sha256") != pa.get("input_sha256")
+                or frozen.get("execution_sha256") != pa.get("execution_sha256")):
             return "裸 K 结构已更新，等待新决策"
+        if side_problem := reentry_problem(conn, frozen, instrument, quote, config, now):
+            return side_problem
         executable = replace(
             quote,
             ask=fill_price(quote, "BUY", instrument.tick),
@@ -201,6 +205,10 @@ class IntradayTrader:
         if config.strategy_model == "price_action" and kind == "intraday":
             # One intent per completed setup/day; refreshed quotes cannot pyramid the same setup.
             key = f"{kind}:pa:{config_id}:{now.date()}:{pa.get('signal_day') if side == 'BUY' else pa.get('exit_day')}:{instrument.symbol}:{side}"
+            if side == "BUY" and pa.get("reentry"):
+                # One re-entry intent per actual profit sale, even across config changes.
+                key = f"intraday:reentry:{instrument.symbol}:{pa['reentry']['sale']['order_id']}"
+                quantity = min(quantity, pa["reentry"]["sale"]["quantity"])
         if minute_t:
             # One intent per closed candle and side, including after restart/expiry.
             key = f"{kind}:minute5:{config_id}:{instrument.symbol}:{minute_t['bar_at']}"
@@ -242,8 +250,10 @@ class IntradayTrader:
 
     def _limit(self, conn, symbol, config, now):
         rows = conn.execute(
-            f"SELECT created_at,updated_at FROM orders WHERE symbol=? AND kind IN {KINDS} AND substr(created_at,1,10)=? ORDER BY id DESC",
-            (symbol, now.date().isoformat()),
+            f"SELECT created_at,updated_at FROM orders WHERE symbol=? AND (kind IN {KINDS} "
+            "OR reason IN (?,?)) AND (substr(created_at,1,10)=? OR id IN "
+            "(SELECT order_id FROM fills WHERE symbol=? AND substr(at,1,10)=?)) ORDER BY updated_at DESC,id DESC",
+            (symbol, *PROFIT_REASONS, now.date().isoformat(), symbol, now.date().isoformat()),
         ).fetchall()
         if len(rows) >= config.intraday_max_orders:
             return "达到本日订单上限"
@@ -402,7 +412,7 @@ class IntradayTrader:
                         "day": now.date().isoformat(),
                         "targets": plan["targets"],
                         "structures": [
-                            (r["symbol"], r.get("pa", {}).get("input_sha256"), r.get("pa", {}).get("action"))
+                            (r["symbol"], r.get("pa", {}).get("execution_sha256", r.get("pa", {}).get("input_sha256")), r.get("pa", {}).get("action"))
                             for r in plan["rows"]
                             if r.get("pa")
                         ]
@@ -444,6 +454,7 @@ class IntradayTrader:
             }
             symbols = sorted(set(holdings) | set(plan["targets"]) | set(active_cycles) | pending_symbols)
             items = []
+            cooling = cooling_symbols(conn, now.date().isoformat(), config)
             for symbol in symbols:
                 instrument = universe.get(symbol)
                 latest = latest_quote(conn, symbol)
@@ -467,9 +478,8 @@ class IntradayTrader:
                     desired = 0 if pa.get("action") == "exit" else current
                     delta = desired - current
                 risk = conn.execute(
-                    "SELECT 1 FROM risk_intents WHERE symbol=? UNION SELECT 1 FROM cooldown WHERE symbol=? AND day=?",
-                    (symbol, symbol, now.date().isoformat()),
-                ).fetchone()
+                    "SELECT 1 FROM risk_intents WHERE symbol=?", (symbol,),
+                ).fetchone() or symbol in cooling
                 symbol_reason = (
                     "风险退出或当日止损冷却"
                     if risk

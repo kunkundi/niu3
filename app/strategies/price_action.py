@@ -131,7 +131,23 @@ def build_plan(universe, histories, held, as_of, execute_day, config, cooldown=N
                 and row["symbol"] in tradable
                 and row["symbol"] not in (cooldown or set())
             )
+    targets = select_targets(rows, held, config)
+    return {
+        "strategy": STRATEGY,
+        "focus_policy": FOCUS_POLICY,
+        "as_of": as_of,
+        "execute_day": execute_day,
+        "rows": sorted(rows, key=lambda r: (r["rank"] or 100000, r["symbol"])),
+        "targets": targets,
+        "timeframe": "day",
+        "trigger": "intraday_quote",
+    }
+
+
+def select_targets(rows, held, config):
     # An absent entry or a different liquidity leader must never force a holding out.
+    for row in rows:
+        row["rank"] = None
     selected = {r["symbol"] for r in rows if r["symbol"] in held and r.get("pa", {}).get("action") != "exit"}
     ranked = sorted(
         (r for r in rows if r["eligible"]),
@@ -145,16 +161,7 @@ def build_plan(universe, histories, held, as_of, execute_day, config, cooldown=N
     for row in rows:
         row["selected"] = row["symbol"] in selected
         row["target_weight"] = str(weight if row["selected"] else 0)
-    return {
-        "strategy": STRATEGY,
-        "focus_policy": FOCUS_POLICY,
-        "as_of": as_of,
-        "execute_day": execute_day,
-        "rows": sorted(rows, key=lambda r: (r["rank"] or 100000, r["symbol"])),
-        "targets": {s: str(weight) for s in sorted(selected)},
-        "timeframe": "day",
-        "trigger": "intraday_quote",
-    }
+    return {s: str(weight) for s in sorted(selected)}
 
 
 def trigger_problem(pa, quote, config, kind, side):

@@ -229,16 +229,16 @@ class CausalStrategyTests(unittest.TestCase):
                 live_prices={instrument.symbol: Decimal("1.244")},
             )
             self.assertEqual(too_late["targets"], {})
-            # Synthetic next-day target touch uses the entry's frozen target, no future K.
+            # A next-day target touch alone no longer forces a profitable trend out.
             tomorrow = at("2026-08-28T10:00:00")
             with f.db.transaction() as conn:
                 set_state(conn, "actions:sz159587", {"at": iso(tomorrow)})
             quote(tomorrow, "1.341", 1000000)
             f.engine.risk_check(tomorrow)
-            self.assertIn("到达入场时确定", f.rows("risk_intents")[0]["reason"])
+            self.assertEqual(f.rows("risk_intents"), [])
             quote(tomorrow + timedelta(seconds=30), "1.341", 5000000)
             f.engine.match(tomorrow + timedelta(seconds=30))
-            self.assertTrue(any(r["side"] == "SELL" for r in f.rows("fills")))
+            self.assertFalse(any(r["side"] == "SELL" for r in f.rows("fills")))
             with f.db.connect() as conn:
                 self.assertEqual(reconcile(conn), [])
         finally:

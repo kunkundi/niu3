@@ -450,12 +450,11 @@ class Worker:
                 selected = set(get_state(conn, "live_targets", {}).get("targets", {}))
             priority = held | pending | selected
             from app.market_data.minute_bars import fetch_five_minute
-            from app.strategies.minute_t import enabled as minute_t_enabled
-
-            if config.intraday_t_enabled and minute_t_enabled(config) and self.calendar.session(now):
-                # Closed positions sold today still need reference levels on their
-                # charts. This observation universe does not change trading targets.
+            if config.strategy_model == "price_action" and self.calendar.session(now):
+                # Minute data also confirms profit exits and post-profit re-entry,
+                # independently of whether inventory T trading is enabled.
                 minute_symbols = held | pending | sold_today(conn, now)
+                priority |= sold_today(conn, now)
                 known = instruments(conn)
                 capacity = 2 - sum(k.startswith("minute5:") for k in self.futures)
                 for symbol in sorted(

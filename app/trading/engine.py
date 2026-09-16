@@ -10,6 +10,9 @@ from app.core.types import Quote, dec, dt, iso, units
 from app.storage.db import Database, get_state, instruments, latest_quote, set_state, settings
 from app.trading.account import reconcile, snapshot
 from app.strategies.focus import FOCUS_POLICY
+from app.strategies.profit import (
+    PROFIT_REASON, PROFIT_REASONS, cooling_symbols, profit_signal, profit_order_problem,
+)
 
 OPEN = "('pending','partial')"
 
@@ -120,6 +123,22 @@ class Engine:
             return
         with self.db.transaction() as conn:
             config_id, config = settings(conn)
+            universe = instruments(conn)
+            # Profit orders are conditional, including legacy target-touch orders.
+            for order in conn.execute(
+                f"SELECT * FROM orders WHERE kind='risk' AND reason IN (?,?) AND status IN {OPEN}",
+                PROFIT_REASONS,
+            ).fetchall():
+                latest = latest_quote(conn, order["symbol"])
+                instrument = universe.get(order["symbol"])
+                problem = "止盈依据待重新确认"
+                if latest and instrument:
+                    problem = profit_order_problem(conn, order, instrument, latest[1], config, now)
+                if problem:
+                    conn.execute("UPDATE orders SET status='cancelled',blocked_reason=?,updated_at=? WHERE id=?",
+                                 (problem, iso(now), order["id"]))
+                    conn.execute("DELETE FROM risk_intents WHERE symbol=? AND reason IN (?,?)",
+                                 (order["symbol"], *PROFIT_REASONS))
             account = snapshot(conn, now)
             if not account["stale"] and not reconcile(conn):
                 peak = max(account["nav_units"], get_state(conn, "peak_nav", account["nav_units"]))
@@ -139,6 +158,7 @@ class Engine:
                 high = max(price, position["high_units"])
                 conn.execute("UPDATE lots SET high=? WHERE symbol=? AND quantity>0", (high, symbol))
                 reason = ""
+                profit_exit = None
                 if config.strategy_model == "price_action":
                     from app.trading.intraday import live_problem
 
@@ -153,10 +173,13 @@ class Engine:
                             set_state(conn, f"pa_position:{symbol}", reference)
                     if reference.get("stop") and price <= reference["stop"]:
                         reason = "裸 K 结构失效：跌破入场／已确认摆动低点"
-                    elif reference.get("target") and price >= reference["target"]:
-                        reason = "裸 K 结构止盈：到达入场时确定的压力／测量目标"
                     elif pa.get("raw", {}).get("exit") and price <= pa["raw"]["exit"]:
                         reason = f"裸 K 反转退出：跌破{pa.get('exit_setup', '反向形态')}低点"
+                    elif position["available"] and symbol in universe:
+                        profit_exit = profit_signal(conn, symbol, reference, latest[1],
+                                                    universe[symbol].tick, config, now)
+                        if profit_exit:
+                            reason = PROFIT_REASON
                 elif Decimal(price * position["quantity"]) <= Decimal(position["risk_cost_units"]) * (
                     1 - config.stop_loss
                 ):
@@ -164,6 +187,14 @@ class Engine:
                 elif Decimal(price) <= Decimal(high) * (1 - config.trailing_stop):
                     reason = "持仓高点回撤止损"
                 if reason:
+                    if reason not in PROFIT_REASONS:
+                        conn.execute(
+                            f"UPDATE orders SET status='cancelled',blocked_reason='结构失效优先',updated_at=? "
+                            f"WHERE symbol=? AND reason IN (?,?) AND status IN {OPEN}",
+                            (iso(now), symbol, *PROFIT_REASONS),
+                        )
+                        conn.execute("DELETE FROM risk_intents WHERE symbol=? AND reason IN (?,?)",
+                                     (symbol, *PROFIT_REASONS))
                     conn.execute(
                         "INSERT OR IGNORE INTO risk_intents VALUES(?,?,?)", (symbol, reason, iso(now))
                     )
@@ -175,18 +206,32 @@ class Engine:
                     f"WHERE symbol=? AND kind IN ('rebalance','intraday','t_sell','t_buy') AND status IN {OPEN}",
                     (iso(now), symbol),
                 )
-                conn.execute("INSERT OR IGNORE INTO cooldown VALUES(?,?)", (symbol, now.date().isoformat()))
+                if intent["reason"] not in PROFIT_REASONS:
+                    conn.execute("INSERT OR IGNORE INTO cooldown VALUES(?,?)", (symbol, now.date().isoformat()))
                 existing = conn.execute(
                     f"SELECT 1 FROM orders WHERE symbol=? AND kind='risk' AND status IN {OPEN}", (symbol,)
                 ).fetchone()
                 if not existing:
                     key = f"risk:{symbol}:{intent['at']}:{now.date()}"
+                    if intent["reason"] in PROFIT_REASONS:
+                        from app.trading.intraday import IntradayTrader
+
+                        if not profit_exit:
+                            conn.execute("DELETE FROM risk_intents WHERE symbol=?", (symbol,))
+                            continue
+                        if IntradayTrader(self)._limit(conn, symbol, config, now):
+                            conn.execute("DELETE FROM risk_intents WHERE symbol=?", (symbol,))
+                            continue
+                        key = f"profit:{config_id}:{symbol}:{profit_exit['bar_at']}"
+                        if conn.execute("SELECT 1 FROM orders WHERE key=?", (key,)).fetchone():
+                            conn.execute("DELETE FROM risk_intents WHERE symbol=?", (symbol,))
+                            continue
                     self._order(
                         conn,
                         key,
                         symbol,
                         "SELL",
-                        position["quantity"],
+                        position["available"] if intent["reason"] in PROFIT_REASONS else position["quantity"],
                         intent["reason"],
                         "risk",
                         now,
@@ -206,6 +251,7 @@ class Engine:
                                     {
                                         "pa": pa or reference.get("structure", {}),
                                         "position_reference": reference,
+                                        "profit_exit": profit_exit,
                                         "quote": latest[1].to_dict(),
                                         "config": config.model_dump(mode="json"),
                                         "reason": intent["reason"],
@@ -361,6 +407,10 @@ class Engine:
             return "停牌或交易状态／盘口／价格边界未知"
         if quote.bid > quote.ask:
             return "盘口倒挂"
+        if order["kind"] == "risk" and order["reason"] in PROFIT_REASONS:
+            problem = profit_order_problem(conn, order, instrument, quote, config, now)
+            if problem:
+                return problem
         if order["kind"] in {"intraday", "t_sell", "t_buy"}:
             from app.trading.intraday import order_problem
 
@@ -380,9 +430,7 @@ class Engine:
                 return "数据未就绪，暂不能买入"
             if quote.ask >= quote.upper:
                 return "涨停不模拟买入"
-            if conn.execute(
-                "SELECT 1 FROM cooldown WHERE symbol=? AND day=?", (order["symbol"], now.date().isoformat())
-            ).fetchone():
+            if order["symbol"] in cooling_symbols(conn, now.date().isoformat(), config):
                 return "当日止损冷却"
             if conn.execute(
                 f"SELECT 1 FROM orders WHERE side='SELL' AND kind IN ('rebalance','intraday','t_sell') AND status IN {OPEN}"
@@ -496,10 +544,13 @@ class Engine:
             "UPDATE orders SET filled=?,status=?,updated_at=?,blocked_reason='' WHERE id=?",
             (filled, "filled" if filled == order["quantity"] else "partial", iso(now), order["id"]),
         )
-        if order["kind"] == "risk":
+        if order["kind"] == "risk" and order["reason"] not in PROFIT_REASONS:
             conn.execute(
                 "INSERT OR IGNORE INTO cooldown VALUES(?,?)", (order["symbol"], now.date().isoformat())
             )
+        if order["reason"] in PROFIT_REASONS and filled == order["quantity"]:
+            conn.execute("DELETE FROM risk_intents WHERE symbol=? AND reason IN (?,?)",
+                         (order["symbol"], *PROFIT_REASONS))
         remaining = conn.execute(
             "SELECT COALESCE(SUM(quantity),0) FROM lots WHERE symbol=?", (order["symbol"],)
         ).fetchone()[0]
