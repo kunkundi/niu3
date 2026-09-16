@@ -19,7 +19,7 @@ from app.automation.service import readiness, history_target
 from app.automation.status import automation_status
 from app.core.calendar import Calendar
 from app.core.config import CONFIG_LABELS, ROOT, data_dir, DisplaySettings, REMOVED_POOL_FIELDS, RETIRED_RISK_FIELDS
-from app.core.types import Instrument, iso, now_cn, yuan, dec, dt, symbol_for
+from app.core.types import Instrument, iso, now_cn, units, yuan, dec, dt, symbol_for
 from app.dashboard.security import (
     authenticate,
     authorized,
@@ -751,6 +751,9 @@ def create_app(
             conn.execute("BEGIN")
             now = clock()
             data = snapshot(conn, now)
+            initial_cash = units(settings(conn)[1].initial_cash)
+            data["initial_cash"] = yuan(initial_cash)
+            data["total_pnl"] = yuan(data["nav_units"] - initial_cash)
             data["display_day"] = expected_day(calendar, now)
             data["daily_return"] = daily_returns(conn, calendar, now, data)
             data["equity"] = [

@@ -73,6 +73,21 @@ class DailyReturnTests(unittest.TestCase):
             self.assertAlmostEqual(data["positions"][0]["daily_pnl"], expected, places=6)
         return data
 
+    def test_account_total_profit_uses_configured_capital_and_includes_purchase_fees(self):
+        self.f.db.change_config({"initial_cash": "123456.78"}, self.now)
+        data = self.account()
+        self.assertEqual(data["initial_cash"], 123456.78)
+        self.assertEqual(data["total_pnl"], 0)
+        self.f.buy()
+        for price, expected in (("0.95", -50.1), ("1.05", 49.9)):
+            with self.subTest(price=price):
+                self.now += timedelta(seconds=1)
+                self.current_quote(price=price)
+                data = self.account()
+                self.assertEqual(data["initial_cash"], 123456.78)
+                self.assertAlmostEqual(data["total_pnl"], expected)
+                self.assertAlmostEqual(data["return_pct"], expected / 123456.78)
+
     def test_new_position_uses_actual_purchase_cost_and_fees(self):
         self.f.buy()
         self.current_quote(previous="0.8")
@@ -86,6 +101,7 @@ class DailyReturnTests(unittest.TestCase):
         self.current_quote()
         data = self.assert_profit(30)
         self.assertAlmostEqual(data["positions"][0]["pnl"], 49.9)
+        self.assertAlmostEqual(data["total_pnl"], 49.9)
 
     def test_addition_counts_only_post_purchase_movement_and_new_fee(self):
         self.old_buy()
@@ -97,7 +113,9 @@ class DailyReturnTests(unittest.TestCase):
         self.old_buy()
         net_sale = self.sell()
         self.current_quote()
-        self.assert_profit(yuan(600 * units("1.05") + net_sale - 1000 * units("1.02")))
+        data = self.assert_profit(yuan(600 * units("1.05") + net_sale - 1000 * units("1.02")))
+        self.assertAlmostEqual(data["total_pnl"], 45.86)
+        self.assertAlmostEqual(data["total_pnl"], data["realized"] + data["unrealized"])
 
     def test_fully_sold_position_contributes_without_current_quote(self):
         self.old_buy()
@@ -106,6 +124,7 @@ class DailyReturnTests(unittest.TestCase):
         data = self.assert_profit(yuan(net_sale - 1000 * units("1.02")))
         self.assertEqual(data["positions"], [])
         self.assertEqual(data["daily_return"]["closed_pnl"], data["daily_return"]["pnl"])
+        self.assertAlmostEqual(data["total_pnl"], 39.8)
 
     def test_same_day_round_trip_includes_both_sides_fees(self):
         with self.f.db.transaction() as conn:
@@ -183,12 +202,16 @@ class DailyReturnTests(unittest.TestCase):
         self.raw_close(price="1.00")
         self.action()
         self.current_quote(price="0.90", previous="0.90")
-        self.assert_profit(0)
+        data = self.assert_profit(0)
+        self.assertAlmostEqual(data["total_pnl"], -0.1)
+        self.assertEqual(data["receivable"], 100)
         self.now = at("2026-09-08T10:00:00")
         with self.f.db.transaction() as conn:
             apply_actions(conn, self.now)
         self.current_quote(price="0.91", previous="0.90")
-        self.assert_profit(10)
+        data = self.assert_profit(10)
+        self.assertAlmostEqual(data["total_pnl"], 9.9)
+        self.assertEqual(data["receivable"], 0)
 
     def test_split_uses_original_shares_and_unadjusted_close(self):
         self.old_buy()

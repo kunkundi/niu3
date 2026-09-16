@@ -4,9 +4,13 @@ defineProps({ account: { type: Object, required: true } })
 </script>
 <template>
   <div class="metrics-grid account-metrics" aria-label="账户资产摘要">
-    <section class="metric-card main-metric">
-      <div class="metric-label">总资产 <span class="metric-unit">CNY</span></div>
-      <div class="big-number">{{ money(account.nav) }}</div>
+    <section class="metric-card profit-metric">
+      <div class="metric-label" title="总资产减初始资金，计入持仓涨跌、已卖出交易、费用与分红">
+        账户当前盈亏
+      </div>
+      <div class="metric-number" :class="changeClass(account.total_pnl)">
+        {{ signedMoney(account.total_pnl) }}
+      </div>
       <div class="metric-bottom">
         <span>累计收益率</span
         ><strong :class="changeClass(account.return_pct)">{{ pct(account.return_pct, true) }}</strong>
@@ -22,16 +26,6 @@ defineProps({ account: { type: Object, required: true } })
       </div>
       <div class="metric-bottom" :class="{ amberText: account.daily_return?.warning }">
         <span>{{ account.daily_return?.warning || '含当日买卖、费用与分红' }}</span>
-      </div>
-    </section>
-    <section class="metric-card profit-metric">
-      <div class="metric-label">持仓浮动盈亏</div>
-      <div class="metric-number" :class="changeClass(account.unrealized)">
-        {{ signedMoney(account.unrealized) }}
-      </div>
-      <div class="metric-bottom">
-        <span>已实现盈亏</span
-        ><strong :class="changeClass(account.realized)">{{ signedMoney(account.realized) }}</strong>
       </div>
     </section>
     <section class="metric-card">
@@ -54,7 +48,7 @@ defineProps({ account: { type: Object, required: true } })
 </template>
 <style scoped>
 .account-metrics {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
   margin-bottom: 0;
   background: var(--panel);
@@ -80,14 +74,13 @@ defineProps({ account: { type: Object, required: true } })
 .account-metrics .metric-unit {
   font-size: 10px;
 }
-.account-metrics .big-number,
 .account-metrics .metric-number {
   font-size: clamp(22px, 2vw, 26px);
   font-weight: 500;
   line-height: 1.2;
   letter-spacing: 0;
 }
-.account-metrics .big-number {
+.account-metrics .profit-metric .metric-number {
   font-weight: 550;
 }
 .account-metrics .metric-bottom {
@@ -104,20 +97,12 @@ defineProps({ account: { type: Object, required: true } })
   .account-metrics .metric-card {
     padding: 8px 10px;
   }
-  .account-metrics .daily-metric {
-    grid-column: 1 / -1;
-    grid-row: 1;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .account-metrics .metric-card:nth-child(3) {
+  .account-metrics .metric-card:nth-child(even) {
     border-right: 0;
   }
-  .account-metrics .main-metric,
-  .account-metrics .profit-metric {
+  .account-metrics .metric-card:nth-child(-n + 2) {
     border-bottom: 1px solid var(--line);
   }
-  .account-metrics .big-number,
   .account-metrics .metric-number {
     font-size: clamp(20px, 5.6vw, 24px);
   }
