@@ -1,6 +1,7 @@
 // Trading adapter for the same causal engine used by the chart. Prices are qfq.
 import { createPriceActionEngine } from './engine.js'
 import { DAILY_HISTORY_BARS, DAILY_STRUCTURE_BARS, dailyStructureOptions } from './daily-policy.js'
+import { entryRejection } from './entry-quality.js'
 
 export function priceActionLevels(input, asOf, tick = 0.001, options = {}) {
   const bars = input.filter((b) => b.date <= asOf && b.closed !== false).slice(-DAILY_HISTORY_BARS)
@@ -43,6 +44,7 @@ export function priceActionLevels(input, asOf, tick = 0.001, options = {}) {
       high: b.high,
       low: b.low,
       context: s.contextLabel,
+      type: s.type,
     })
   }
   for (const b of a.breakouts) {
@@ -62,10 +64,42 @@ export function priceActionLevels(input, asOf, tick = 0.001, options = {}) {
       high: Math.max(bar.high, b.boundaryPrice),
       low: Math.min(bar.low, b.boundaryPrice),
       context: b.phase,
+      type: 'structure',
+      followThrough: b.followThrough,
+      retested: b.retestIndex != null,
     })
   }
   candidates.sort((x, y) => y.index - x.index)
-  const bull = candidates.find((s) => s.direction === 'bullish')
+  const entryPolicy = options.entryPolicy ?? 'valid'
+  const rejectedEntries = []
+  let bull = candidates.find((s) => {
+    if (s.direction !== 'bullish') return false
+    const reason = entryRejection(s, bars, trend, tick, entryPolicy)
+    if (reason) rejectedEntries.push({ label: s.label, knownAt: s.knownAt, reason })
+    return !reason
+  })
+  // Recovery need not print a named candle pattern. Its breakout still needs a
+  // later quote; current-day OHLC never participates in creating this setup.
+  // Research-only: broad historical validation did not justify enabling it live.
+  if (!bull && options.continuation === true && trend !== 'down' && bars.length >= 3) {
+    const [first, previous, latest] = bars.slice(-3)
+    if (
+      first.close < previous.close &&
+      previous.close < latest.close &&
+      latest.low > previous.low &&
+      latest.close >= (latest.high + latest.low) / 2
+    ) {
+      bull = {
+        direction: 'bullish',
+        label: '上行延续突破',
+        index: n,
+        knownAt: latest.date,
+        high: Math.max(previous.high, latest.high),
+        low: latest.low,
+        context: '连续收盘抬高、最近低点抬高，等待突破两日高点',
+      }
+    }
+  }
   const bear = candidates.find((s) => s.direction === 'bearish')
   const lows = a.recentSwings.filter((s) => s.type === 'low' && s.confirmedIndex <= n)
   const support = a.levels.filter((s) => s.type === 'support').sort((x, y) => y.price - x.price)[0]
@@ -85,6 +119,8 @@ export function priceActionLevels(input, asOf, tick = 0.001, options = {}) {
     ready: true,
     as_of: asOf,
     timeframe: 'day',
+    entry_policy: entryPolicy,
+    entry_rejections: rejectedEntries,
     history_bars: bars.length,
     history_limit: DAILY_HISTORY_BARS,
     structure_bars: DAILY_STRUCTURE_BARS,

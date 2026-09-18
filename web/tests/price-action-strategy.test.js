@@ -41,6 +41,32 @@ test('future bars and an unfinished bar cannot alter a historical decision', () 
   assert.deepEqual(priceActionLevels([...bars, { ...future, date: asOf, closed: false }], asOf), expected)
 })
 
+test('continuation remains research-only and cannot use future candles', () => {
+  const bars = Array.from({ length: 140 }, (_, i) => ({
+    date: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10),
+    open: 1,
+    close: 1,
+    high: 1.02,
+    low: 0.98,
+    closed: true,
+  }))
+  Object.assign(bars.at(-3), { open: 1.02, close: 1.022, high: 1.04, low: 1.01 })
+  Object.assign(bars.at(-2), { open: 1.017, close: 1.024, high: 1.03, low: 1.015 })
+  Object.assign(bars.at(-1), { open: 1.023, close: 1.026, high: 1.028, low: 1.019 })
+  const asOf = bars.at(-1).date
+  assert.equal(priceActionLevels(bars, asOf).entry, null)
+  const researched = priceActionLevels(bars, asOf, 0.001, { continuation: true })
+  assert.equal(researched.setup, '上行延续突破')
+  assert.equal(researched.entry, 1.031)
+  assert.equal(researched.entry_stop, 1.018)
+  assert.deepEqual(
+    priceActionLevels([...bars, { date: '2099-01-01', high: Infinity }], asOf, 0.001, {
+      continuation: true,
+    }),
+    researched,
+  )
+})
+
 test('current direction is an explicit research option and remains causal; the live default stays legacy', () => {
   const { bars } = JSON.parse(
     readFileSync(new URL('./fixtures/sz159587-current-state.json', import.meta.url), 'utf8'),
@@ -85,6 +111,20 @@ test('a failed bullish signal is not reused, and bearish engulfing supplies an e
   assert.notEqual(result.signal_day, '2026-05-20')
   assert.ok(result.exit < 1.2)
   assert.ok(result.exit_setup)
+})
+
+test('a previously confirmed buy setup expires after a later close invalidates it', () => {
+  const bars = history()
+  bars.push({ date: '2026-05-21', open: 1.312, close: 1.32, high: 1.325, low: 1.3, closed: true })
+  bars.push({ date: '2026-05-22', open: 1.319, close: 1.23, high: 1.324, low: 1.22, closed: true })
+  const legacy = priceActionLevels(bars, '2026-05-22', 0.001, { entryPolicy: 'legacy' })
+  const fixed = priceActionLevels(bars, '2026-05-22')
+  assert.equal(legacy.signal_day, '2026-05-20')
+  assert.equal(fixed.entry, null)
+  assert.match(fixed.entry_rejections[0].reason, /跌破失效线/)
+  assert.equal(fixed.exit, legacy.exit)
+  assert.equal(fixed.structural_stop, legacy.structural_stop)
+  assert.deepEqual(fixed, priceActionLevels([...bars, { date: '2099-01-01', close: 999 }], '2026-05-22'))
 })
 
 test('strategy and chart share the recent 60-bar structure while retaining longer background levels', () => {

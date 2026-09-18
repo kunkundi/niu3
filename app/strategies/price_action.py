@@ -14,7 +14,7 @@ from app.core.config import ROOT
 from app.core.types import dec
 from app.strategies.focus import FOCUS_POLICY, select_focus
 
-STRATEGY = "price-action-v3"
+STRATEGY = "price-action-v5"
 _cache = OrderedDict()
 
 
@@ -37,6 +37,9 @@ def price_decision(pa, price, minimum_rr, rr_enabled=True):
             if allowed
             else "距离结构目标过近，潜在盈亏比不足",
         }
+    if not pa.get("entry") and pa.get("entry_rejections"):
+        return {"action": "hold", "reason": "；".join(dict.fromkeys(
+            row["reason"] for row in pa["entry_rejections"]))}
     return {"action": "hold", "reason": f"{pa['trend']}；等待有效形态突破，持仓按结构管理"}
 
 
@@ -148,6 +151,7 @@ def select_targets(rows, held, config):
     # An absent entry or a different liquidity leader must never force a holding out.
     for row in rows:
         row["rank"] = None
+        row["reasons"] = [r for r in row.get("reasons", []) if r != "持仓名额已满，等待既有持仓结构退出"]
     selected = {r["symbol"] for r in rows if r["symbol"] in held and r.get("pa", {}).get("action") != "exit"}
     ranked = sorted(
         (r for r in rows if r["eligible"]),
@@ -161,6 +165,10 @@ def select_targets(rows, held, config):
     for row in rows:
         row["selected"] = row["symbol"] in selected
         row["target_weight"] = str(weight if row["selected"] else 0)
+        if row["eligible"] and not row["selected"]:
+            reason = "持仓名额已满，等待既有持仓结构退出"
+            if reason not in row["reasons"]:
+                row["reasons"].append(reason)
     return {s: str(weight) for s in sorted(selected)}
 
 

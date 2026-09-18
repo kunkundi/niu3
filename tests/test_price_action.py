@@ -11,7 +11,7 @@ from app.core.config import Settings
 from app.core.types import iso
 from app.storage.db import get_state, latest_quote, set_state, settings
 from app.strategies.focus import FOCUS_POLICY
-from app.strategies.price_action import STRATEGY, build_plan, price_decision, trigger_problem
+from app.strategies.price_action import STRATEGY, build_plan, price_decision, trigger_problem, select_targets
 from app.trading.account import reconcile
 from app.trading.actions import adjust_pa_reference
 from app.trading.intraday import IntradayTrader, live_problem
@@ -30,6 +30,23 @@ def candles():
 
 
 class PriceActionTests(unittest.TestCase):
+    def test_invalidated_entry_explanation_does_not_suppress_hard_exit(self):
+        pa = {"ready": True, "entry": None, "trend": "上升结构", "structural_stop": .9,
+              "entry_rejections": [{"reason": "旧信号已失效"}, {"reason": "旧信号已失效"}]}
+        self.assertEqual(price_decision(pa, 1, 1.5), {"action": "hold", "reason": "旧信号已失效"})
+        self.assertEqual(price_decision(pa, .8, 1.5)["action"], "exit")
+
+    def test_full_position_limit_explanation_clears_when_a_slot_becomes_available(self):
+        rows = [
+            {"symbol": "held", "eligible": False, "reasons": [], "pa": {"action": "hold"}},
+            {"symbol": "new", "eligible": True, "reasons": [], "pa": {"action": "buy", "reward_risk": 3}},
+        ]
+        config = self.config.model_copy(update={"max_positions": 1})
+        self.assertNotIn("new", select_targets(rows, {"held"}, config))
+        self.assertEqual(rows[1]["reasons"], ["持仓名额已满，等待既有持仓结构退出"])
+        self.assertIn("new", select_targets(rows, set(), config))
+        self.assertEqual(rows[1]["reasons"], [])
+
     def setUp(self):
         self.f = Fixture()
         self.now = at("2026-09-07T10:30:00")
