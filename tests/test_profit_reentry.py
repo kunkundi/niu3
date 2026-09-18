@@ -13,7 +13,7 @@ from app.market_data.minute_bars import normalize, save_five_minute
 from app.storage.db import Database, dump, get_state, latest_quote, set_state, settings
 from app.strategies.profit import (
     LEGACY_PROFIT, PROFIT_REASON, cooling_symbols, latest_profit_sale,
-    reentry_setup,
+    reentry_setup, profit_quantity,
 )
 from app.trading.account import reconcile
 from app.trading.intraday import IntradayTrader
@@ -91,6 +91,8 @@ class ProfitReentryTests(unittest.TestCase):
         self.assertEqual(self.f.rows("cooldown"), [])
 
     def test_profit_rejection_fills_without_stop_cooldown(self):
+        with self.f.db.transaction() as conn:
+            set_state(conn, "pa_position:sh510300", {"stop": 940000, "target": 1000000})
         self.f.engine.risk_check(self.now)
         order = self.f.rows("orders")[-1]
         self.assertEqual(order["reason"], PROFIT_REASON)
@@ -99,6 +101,87 @@ class ProfitReentryTests(unittest.TestCase):
         self.assertEqual(self.f.rows("orders")[-1]["status"], "filled")
         self.assertEqual(self.f.rows("cooldown"), [])
         self.assertEqual(self.f.rows("risk_intents"), [])
+        self.assertEqual(self.f.rows("fills")[-1]["quantity"], 200)
+        self.assertEqual(sum(r["quantity"] for r in self.f.rows("lots")), 800)
+        with self.f.db.connect() as conn:
+            reference = get_state(conn, "pa_position:sh510300")
+        self.assertEqual(reference["profit_budget"], 200)
+        self.assertEqual(reference["profit_sold"], 200)
+        self.assertEqual(reference["stop"], 1001000)
+
+    def test_profit_budget_survives_restart_and_never_replenishes(self):
+        self.test_profit_rejection_fills_without_stop_cooldown()
+        Database(self.f.db.path)
+        later = self.now + timedelta(seconds=60)
+        self.f.quote(later, price="1.028", volume=5000000)
+        self.f.engine.risk_check(later)
+        self.assertEqual(len(self.f.rows("orders")), 2)
+        # A subsequent true structural failure exits the remaining core.
+        self.f.quote(later + timedelta(seconds=1), price=".99", volume=6000000)
+        self.f.engine.risk_check(later + timedelta(seconds=1))
+        order = self.f.rows("orders")[-1]
+        self.assertEqual(order["quantity"], 800)
+        self.assertIn("结构失效", order["reason"])
+
+    def test_partial_profit_fill_cancel_and_new_candle_only_offer_remaining_budget(self):
+        with self.f.db.transaction() as conn:
+            set_state(conn, "pa_position:sh510300", {"stop": 940000, "target": 1000000})
+        self.f.engine.risk_check(self.now)
+        later = self.now + timedelta(seconds=30)
+        self.f.quote(later, price="1.028", volume=3010000)
+        self.f.engine.match(later)
+        self.assertEqual(self.f.rows("fills")[-1]["quantity"], 100)
+        with self.f.db.connect() as conn:
+            reference = get_state(conn, "pa_position:sh510300")
+        self.assertEqual(reference["profit_sold"], 100)
+        self.assertEqual(profit_quantity(reference, 900, 900, 100), 100)
+        Database(self.f.db.path)
+        with self.f.db.transaction() as conn:
+            conn.execute("UPDATE orders SET status='cancelled' WHERE id=?", (self.f.rows("orders")[-1]["id"],))
+        with patch("app.trading.engine.profit_signal", return_value={"bar_at": "next-completed-candle"}):
+            self.f.engine.risk_check(self.now + timedelta(minutes=6))
+        # Refresh a current quote before evaluating that new candle.
+        self.f.quote(self.now + timedelta(minutes=6), price="1.028", volume=4000000)
+        with patch("app.trading.engine.profit_signal", return_value={"bar_at": "next-completed-candle"}):
+            self.f.engine.risk_check(self.now + timedelta(minutes=6))
+        self.assertEqual(self.f.rows("orders")[-1]["quantity"], 100)
+
+    def test_small_inventory_is_not_liquidated_to_meet_a_round_lot(self):
+        self.assertEqual(profit_quantity({}, 300, 300, 100), 0)
+        self.assertEqual(profit_quantity({}, 1000, 0, 100), 0)
+        self.assertEqual(profit_quantity({}, 300, 300, 100, preserve_core=False), 300)
+
+    def test_rejection_at_unbroken_target_still_exits_all_available_inventory(self):
+        self.f.engine.risk_check(self.now)
+        self.assertEqual(self.f.rows("orders")[-1]["quantity"], 1000)
+
+    def test_unfilled_cancelled_exit_can_be_reclassified_after_confirmed_breakout(self):
+        self.f.engine.risk_check(self.now)
+        self.assertEqual(self.f.rows("orders")[-1]["quantity"], 1000)
+        for minutes in (5, 10):
+            later = self.now + timedelta(minutes=minutes)
+            rows = minute_rows()
+            for row in rows:
+                row["at"] = iso(at(row["at"]) + timedelta(minutes=minutes))
+                for key in ("open", "high", "low", "close"):
+                    row[key] = str(Decimal(row[key]) + Decimal(".05"))
+            with self.f.db.transaction() as conn:
+                save_five_minute(conn, normalize(rows, "sh510300", later, "test"))
+            self.f.quote(later, price="1.078", volume=4000000)
+            self.f.engine.risk_check(later)
+        self.assertEqual(self.f.rows("orders")[-2]["status"], "cancelled")
+        self.assertEqual(self.f.rows("orders")[-1]["quantity"], 200)
+
+    def test_corporate_action_scales_frozen_trim_budget_and_preserves_spent_fraction(self):
+        from app.trading.actions import adjust_pa_reference
+
+        with self.f.db.transaction() as conn:
+            set_state(conn, "pa_position:sh510300", {"stop": 1000000, "target": 1100000,
+                                                    "profit_budget": 200, "profit_sold": 100})
+            adjust_pa_reference(conn, "sh510300", ratio=Decimal(2))
+            reference = get_state(conn, "pa_position:sh510300")
+        self.assertEqual(reference, {"stop": 500000, "target": 550000,
+                                     "profit_budget": 400, "profit_sold": 200})
 
     def test_breakout_after_submission_blocks_and_cancels_profit_order(self):
         self.f.engine.risk_check(self.now)

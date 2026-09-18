@@ -11,9 +11,12 @@ from app.storage.db import get_state, instruments, put_instrument, set_state
 def adjust_pa_reference(conn, symbol, *, dividend=0, ratio=Decimal(1)):
     reference = get_state(conn, f"pa_position:{symbol}", {})
     if reference:
-        for key in ("stop", "target"):
+        for key in ("stop", "target", "profit_core_stop"):
             if reference.get(key):
                 reference[key] = max(0, int((Decimal(reference[key]) - dividend) / ratio))
+        for key in ("profit_budget", "profit_sold"):
+            if key in reference:
+                reference[key] = int(Decimal(reference[key]) * ratio)
         set_state(conn, f"pa_position:{symbol}", reference)
 
 

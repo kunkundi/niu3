@@ -11,7 +11,7 @@ from app.storage.db import Database, get_state, instruments, latest_quote, set_s
 from app.trading.account import reconcile, snapshot
 from app.strategies.focus import FOCUS_POLICY
 from app.strategies.profit import (
-    PROFIT_REASON, PROFIT_REASONS, cooling_symbols, profit_signal, profit_order_problem,
+    PROFIT_REASON, PROFIT_REASONS, cooling_symbols, profit_signal, profit_order_problem, profit_quantity,
 )
 
 OPEN = "('pending','partial')"
@@ -175,7 +175,9 @@ class Engine:
                         reason = "裸 K 结构失效：跌破入场／已确认摆动低点"
                     elif pa.get("raw", {}).get("exit") and price <= pa["raw"]["exit"]:
                         reason = f"裸 K 反转退出：跌破{pa.get('exit_setup', '反向形态')}低点"
-                    elif position["available"] and symbol in universe:
+                    elif (position["available"] and symbol in universe
+                          and (not reference.get("profit_sold")
+                               or reference.get("profit_sold", 0) < reference["profit_budget"])):
                         profit_exit = profit_signal(conn, symbol, reference, latest[1],
                                                     universe[symbol].tick, config, now)
                         if profit_exit:
@@ -226,12 +228,28 @@ class Engine:
                         if conn.execute("SELECT 1 FROM orders WHERE key=?", (key,)).fetchone():
                             conn.execute("DELETE FROM risk_intents WHERE symbol=?", (symbol,))
                             continue
+                        if not reference.get("profit_sold"):
+                            reference["profit_preserve_core"] = profit_exit.get("preserve_core", False)
+                            reference.pop("profit_budget", None)
+                            reference["profit_budget"] = profit_quantity(
+                                reference, position["quantity"], position["quantity"], universe[symbol].lot_size,
+                                preserve_core=reference["profit_preserve_core"],
+                            )
+                            reference["profit_sold"] = 0
+                            reference["profit_core_stop"] = profit_exit.get("core_stop")
+                            set_state(conn, f"pa_position:{symbol}", reference)
+                        if not profit_quantity(reference, position["quantity"], position["available"],
+                                               universe[symbol].lot_size):
+                            conn.execute("DELETE FROM risk_intents WHERE symbol=?", (symbol,))
+                            continue
                     self._order(
                         conn,
                         key,
                         symbol,
                         "SELL",
-                        position["available"] if intent["reason"] in PROFIT_REASONS else position["quantity"],
+                        profit_quantity(reference, position["quantity"], position["available"],
+                                        universe[symbol].lot_size)
+                        if intent["reason"] in PROFIT_REASONS else position["quantity"],
                         intent["reason"],
                         "risk",
                         now,
@@ -551,6 +569,24 @@ class Engine:
         if order["reason"] in PROFIT_REASONS and filled == order["quantity"]:
             conn.execute("DELETE FROM risk_intents WHERE symbol=? AND reason IN (?,?)",
                          (order["symbol"], *PROFIT_REASONS))
+        if order["side"] == "SELL" and order["reason"] in PROFIT_REASONS:
+            reference = get_state(conn, f"pa_position:{order['symbol']}", {})
+            if "profit_budget" in reference:
+                reference["profit_sold"] = reference.get("profit_sold", 0) + quantity
+                remaining = conn.execute(
+                    "SELECT SUM(quantity),SUM(risk_cost) FROM lots WHERE symbol=? AND quantity>0",
+                    (order["symbol"],),
+                ).fetchone()
+                if remaining[0]:
+                    # Cover the remaining risk basis, rounded up to a tradable tick.
+                    # This is a protection level, not a guaranteed breakeven fill.
+                    basis = (remaining[1] + remaining[0] - 1) // remaining[0]
+                    protection = (basis + instrument.tick - 1) // instrument.tick * instrument.tick
+                    protection = max(protection, (reference.get("profit_core_stop") or 0)
+                                     // instrument.tick * instrument.tick)
+                    if protection < price:
+                        reference["stop"] = max(reference.get("stop", 0), protection)
+                set_state(conn, f"pa_position:{order['symbol']}", reference)
         remaining = conn.execute(
             "SELECT COALESCE(SUM(quantity),0) FROM lots WHERE symbol=?", (order["symbol"],)
         ).fetchone()[0]

@@ -13,7 +13,19 @@ from app.strategies.minute_t import context
 LEGACY_PROFIT = "裸 K 结构止盈：到达入场时确定的压力／测量目标"
 PROFIT_REASON = "裸 K 确认止盈：目标附近已完成 5 分钟 K 转弱"
 PROFIT_REASONS = (LEGACY_PROFIT, PROFIT_REASON)
-POLICY = "pa-profit-v1"
+POLICY = "pa-profit-v2"
+PROFIT_FRACTION = Decimal("0.25")
+
+
+def profit_quantity(reference, quantity, available, lot_size, preserve_core=True):
+    """Freeze the budget after the first fill; cancellation never replenishes spent shares."""
+    budget = reference.get("profit_budget")
+    if budget is None:
+        budget = (int(Decimal(quantity) * PROFIT_FRACTION) // lot_size * lot_size
+                  if preserve_core else quantity)
+    remaining = max(0, budget - reference.get("profit_sold", 0))
+    result = min(available, remaining)
+    return result // lot_size * lot_size if reference.get("profit_preserve_core", preserve_core) else result
 
 
 def cooling_symbols(conn, day, config):
@@ -52,8 +64,13 @@ def profit_signal(conn, symbol, reference, quote, tick, config, now):
         and quote.status == "trading"
     ):
         return None
+    # A target rejection and a pullback after an established breakout are distinct.
+    # Retain a core only when two prior completed bars held wholly above the target.
+    preserve_core = all(b["low"] > target + tolerance for b in result["bars"][-3:-1])
+    preserve_core = preserve_core and bar["low"] > target + tolerance
     return {**result, "policy": POLICY, "target": target, "price_min": lower,
-            "price_max": bar["close"] + tolerance}
+            "price_max": bar["close"] + tolerance, "preserve_core": preserve_core,
+            "core_stop": target - tolerance if preserve_core else None}
 
 
 def profit_order_problem(conn, order, instrument, quote, config, now):
