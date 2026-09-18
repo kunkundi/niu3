@@ -166,7 +166,11 @@ def parse_profile(instrument: Instrument, html: str, now: datetime) -> Instrumen
         category, region = "commodity", "CN"
     elif "股票" in fund_type or "QDII" in fund_type:
         category = "equity"
-        if re.search(
+        # Hang Seng also publishes mainland A-share indices. Its brand alone
+        # must not turn their domestic stock ETFs into same-day tradable funds.
+        if re.match(r"^恒生A股", index) and "QDII" not in fund_type:
+            region = "CN"
+        elif re.search(
             "QDII|港股|沪港|深港|沪深港|A\\+H|恒生|香港|纳斯达克|标普|美国|日经|日本|德国|法国|越南|全球|海外|亚太|新兴市场",
             full,
         ):

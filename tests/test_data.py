@@ -76,6 +76,20 @@ class DataTests(unittest.TestCase):
             self.assertEqual(parsed.index_id, "细分化工")
             self.assertFalse(parsed.tradable)
 
+    def test_hang_seng_a_share_index_is_domestic_t1(self):
+        for fund_type, index, category, region, settlement in (
+            ("指数型-股票", "恒生A股电网设备指数", "equity", "CN", 1),
+            ("指数型-股票", "恒生 A 股专精特新50指数", "equity", "CN", 1),
+            ("指数型-股票", "恒生指数", "cross_border", "OVERSEAS", 0),
+            ("指数型-股票", "恒生中国企业指数", "cross_border", "OVERSEAS", 0),
+            ("QDII-股票", "恒生A股电网设备指数", "cross_border", "OVERSEAS", 0),
+        ):
+            with self.subTest(index=index, fund_type=fund_type):
+                result = parse_profile(self.f.instrument, self.profile(fund_type, index), at())
+                self.assertEqual((result.category, result.region, result.settlement),
+                                 (category, region, settlement))
+                self.assertTrue(result.verified)
+
     def test_tencent_units_precision_timestamp_and_identity(self):
         parts = ["0"] * 60
         for key, value in {
