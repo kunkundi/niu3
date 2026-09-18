@@ -35,7 +35,7 @@ def buy_size(cash, price, factor, lot, config):
     return quantity * factor
 
 
-def simulate(bars, plans, instrument, config, path="OHLC", benchmark=False):
+def simulate(bars, plans, instrument, config, path="OHLC", benchmark=False, profit_targets=True):
     cash = float(config.initial_cash)
     initial = cash
     position = None
@@ -87,11 +87,11 @@ def simulate(bars, plans, instrument, config, path="OHLC", benchmark=False):
             if exited or not pa.get("ready") or pa.get("data_gap"):
                 return
             counters["first_touches"] += 1
-            if not benchmark and price_decision(pa, price, config.pa_min_rr)["action"] != "buy":
+            if not benchmark and price_decision(pa, price, config.pa_min_rr, config.pa_rr_enabled)["action"] != "buy":
                 counters["rejected_reference"] += 1
                 return
             fill = execution_price(price, factor, tick, "BUY")
-            if not benchmark and price_decision(pa, fill, config.pa_min_rr)["action"] != "buy":
+            if not benchmark and price_decision(pa, fill, config.pa_min_rr, config.pa_rr_enabled)["action"] != "buy":
                 counters["rejected_after_cost"] += 1
                 return
             quantity = buy_size(cash, fill, factor, instrument["lot_size"], config)
@@ -109,7 +109,7 @@ def simulate(bars, plans, instrument, config, path="OHLC", benchmark=False):
                 "entry_price": fill, "quantity": quantity, "cost": cost,
                 "entry_fee": commission,
                 "stop": max(pa.get("entry_stop") or 0, pa.get("structural_stop") or 0),
-                "target": pa.get("target") or math.inf, "pending_exit": None,
+                "target": (pa.get("target") or math.inf) if profit_targets else math.inf, "pending_exit": None,
             }
             counters["entries"] += 1
 

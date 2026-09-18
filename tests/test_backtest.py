@@ -68,6 +68,15 @@ class DailyScenarioBacktestTests(unittest.TestCase):
         for side in ("BUY", "SELL"):
             self.assertAlmostEqual(execution_price(.842, 1, .001, side), .842)
 
+    def test_actual_rr_switch_and_entry_only_ablation_are_respected(self):
+        bars = [self.bar("2026-01-02", 10, 11, 9.5, 10.8)]
+        plans = {"2026-01-02": self.plan(target=10.5)}
+        self.assertEqual(simulate(bars, plans, self.instrument, self.config)["entries"], 0)
+        disabled = self.config.model_copy(update={"pa_rr_enabled": False})
+        result = simulate(bars, plans, self.instrument, disabled, profit_targets=False)
+        self.assertEqual(result["entries"], 1)
+        self.assertEqual(result["closed_trades"], 0)
+
     def test_future_prices_cannot_change_earlier_equity_and_same_day_signals_are_rejected(self):
         bars = [self.bar("2026-01-02", 10, 10.5, 9.5, 10.2)]
         plans = {"2026-01-02": self.plan()}
