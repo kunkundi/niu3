@@ -37,37 +37,36 @@ def post_close_payload(conn, calendar, now, config_id, config):
     universe = tracked_instruments(conn)
     histories, hashes = {}, {}
     updated_at = record["at"]
-    if config.strategy_model == "price_action":
-        for symbol, instrument in universe.items():
-            rows = conn.execute(
-                "SELECT payload,fetched_at FROM bars WHERE symbol=? AND adjustment='qfq' AND day<=? "
-                "ORDER BY day DESC LIMIT ?",
-                (symbol, as_of, config.history_bars),
-            ).fetchall()[::-1]
-            history = [Bar(**json.loads(row["payload"])) for row in rows]
-            if instrument.watched and (not history or history[-1].day != as_of):
-                return None
-            histories[symbol] = history
-            try:
-                request = analysis_request(history, as_of, instrument.tick, config.minimum_bars)
-            except (ValueError, TypeError, ArithmeticError):
-                return None
-            if any(
-                not math.isfinite(bar[key])
-                for bar in request["bars"]
-                for key in ("open", "high", "low", "close")
-            ):
-                return None
-            hashes[symbol] = input_hash(request)
-            updated_at = max(updated_at, *(row["fetched_at"] for row in rows)) if rows else updated_at
-        # Corrected daily bars refresh this display without overwriting frozen
-        # plans or rewriting historical trades. The structure engine caches inputs.
-        if plan.get("strategy") != STRATEGY or any(
-            row.get("pa", {}).get("input_sha256") != hashes.get(row["symbol"])
-            for row in plan["rows"]
-            if row["symbol"] in hashes
+    for symbol, instrument in universe.items():
+        rows = conn.execute(
+            "SELECT payload,fetched_at FROM bars WHERE symbol=? AND adjustment='qfq' AND day<=? "
+            "ORDER BY day DESC LIMIT ?",
+            (symbol, as_of, config.history_bars),
+        ).fetchall()[::-1]
+        history = [Bar(**json.loads(row["payload"])) for row in rows]
+        if instrument.watched and (not history or history[-1].day != as_of):
+            return None
+        histories[symbol] = history
+        try:
+            request = analysis_request(history, as_of, instrument.tick, config.minimum_bars)
+        except (ValueError, TypeError, ArithmeticError):
+            return None
+        if any(
+            not math.isfinite(bar[key])
+            for bar in request["bars"]
+            for key in ("open", "high", "low", "close")
         ):
-            plan = build_plan(list(universe.values()), histories, set(), as_of, next_day, config)
+            return None
+        hashes[symbol] = input_hash(request)
+        updated_at = max(updated_at, *(row["fetched_at"] for row in rows)) if rows else updated_at
+    # Corrected daily bars refresh this display without overwriting frozen
+    # plans or rewriting historical trades. The structure engine caches inputs.
+    if plan.get("strategy") != STRATEGY or any(
+        row.get("pa", {}).get("input_sha256") != hashes.get(row["symbol"])
+        for row in plan["rows"]
+        if row["symbol"] in hashes
+    ):
+        plan = build_plan(list(universe.values()), histories, set(), as_of, next_day, config)
     rows = []
     for source in plan["rows"]:
         instrument = universe.get(source["symbol"])
@@ -76,17 +75,16 @@ def post_close_payload(conn, calendar, now, config_id, config):
         row = {**source, "selected": False, "eligible": False, "target_weight": "0", "rank": None}
         pa = row.get("pa", {})
         candidate = bool(source.get("eligible"))
-        if config.strategy_model == "price_action":
-            decision = (
-                price_decision(pa, pa["entry"], config.pa_min_rr, config.pa_rr_enabled)
-                if (pa.get("ready") and pa.get("entry") and pa.get("entry_stop", 0) > 0)
-                else None
-            )
-            candidate = bool(decision and decision["action"] == "buy")
-            if decision and not candidate:
-                row["reasons"] = [
-                    reason for reason in source["reasons"] if reason != "等待有效盘中行情触发已完成日 K 结构"
-                ] + [decision["reason"]]
+        decision = (
+            price_decision(pa, pa["entry"], config.pa_min_rr, config.pa_rr_enabled)
+            if (pa.get("ready") and pa.get("entry") and pa.get("entry_stop", 0) > 0)
+            else None
+        )
+        candidate = bool(decision and decision["action"] == "buy")
+        if decision and not candidate:
+            row["reasons"] = [
+                reason for reason in source["reasons"] if reason != "等待有效盘中行情触发已完成日 K 结构"
+            ] + [decision["reason"]]
         row["post_close_candidate"] = bool(candidate and instrument.tradable and source["representative"])
         if row["post_close_candidate"]:
             row["reasons"] = [

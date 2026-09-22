@@ -14,6 +14,7 @@ DEFAULT_MINIMUM_AMOUNT = Decimal("100000000")
 PA_HISTORY_BARS = 250
 RETIRED_RISK_FIELDS = {"drawdown_stop"}
 RETIRED_EXECUTION_FIELDS = {"slippage_bps"}
+RETIRED_STRATEGY_FIELDS = {"retain_rank", "stop_loss", "trailing_stop", "intraday_drift", "intraday_t_trigger"}
 
 
 def data_dir() -> Path:
@@ -36,9 +37,6 @@ class Settings(BaseModel):
     minimum_turnover: Decimal = Field(default=Decimal("0"), ge=0)
     focus_categories: list[str] = Field(default_factory=lambda: list(CATEGORY_LABELS))
     focus_markets: list[str] = Field(default_factory=lambda: list(MARKET_LABELS))
-    retain_rank: int = Field(default=8, ge=1, le=50)
-    stop_loss: Decimal = Field(default=Decimal("0.05"), gt=0, lt=1)
-    trailing_stop: Decimal = Field(default=Decimal("0.08"), gt=0, lt=1)
     commission_rate: Decimal = Field(default=Decimal("0.0001"), ge=0, le=Decimal("0.01"))
     minimum_commission: Decimal = Field(default=Decimal("0"), ge=0, le=100)
     participation: Decimal = Field(default=Decimal("0.01"), gt=0, le=Decimal("0.01"))
@@ -46,25 +44,28 @@ class Settings(BaseModel):
     coverage_required: Decimal = Field(default=Decimal("0.95"), ge=Decimal("0.8"), le=1)
     market_interval: int = Field(default=60, ge=60, le=600)
     holding_interval: int = Field(default=30, ge=15, le=60)
-    execution_mode: Literal["daily", "intraday"] = "daily"
-    strategy_model: Literal["momentum", "price_action"] = "momentum"
+    execution_mode: Literal["intraday"] = "intraday"
+    strategy_model: Literal["price_action"] = "price_action"
     pa_rr_enabled: bool = True
     pa_min_rr: Decimal = Field(default=Decimal("1.5"), ge=1, le=5)
     intraday_confirmations: int = Field(default=2, ge=1, le=5)
     intraday_min_interval: int = Field(default=300, ge=60, le=3600)
-    intraday_drift: Decimal = Field(default=Decimal("0.02"), ge=Decimal("0.005"), le=Decimal("0.20"))
     intraday_max_orders: int = Field(default=6, ge=2, le=30)
     intraday_order_ttl: int = Field(default=300, ge=60, le=1800)
     intraday_t_enabled: bool = True
     intraday_t_model: Literal["daily", "minute5"] = "daily"
-    intraday_t_trigger: Decimal = Field(default=Decimal("0.01"), ge=Decimal("0.003"), le=Decimal("0.10"))
     intraday_t_fraction: Decimal = Field(default=Decimal("0.25"), gt=0, le=Decimal("0.50"))
     intraday_t_cycles: int = Field(default=2, ge=1, le=5)
 
     @property
     def history_bars(self) -> int:
         # Eligibility and the background calculation window serve different purposes.
-        return PA_HISTORY_BARS if self.strategy_model == "price_action" else self.minimum_bars
+        return PA_HISTORY_BARS
+
+    @classmethod
+    def from_record(cls, values: dict):
+        """Decode frozen historical fees/settings without restoring retired execution."""
+        return cls.model_validate({**values, "strategy_model": "price_action", "execution_mode": "intraday"})
 
     @model_validator(mode="before")
     @classmethod
@@ -72,7 +73,7 @@ class Settings(BaseModel):
         # Historical configurations and frozen orders remain readable without
         # rewriting their evidence. Retired fields no longer affect execution.
         if isinstance(values, dict):
-            retired = RETIRED_RISK_FIELDS | RETIRED_EXECUTION_FIELDS
+            retired = RETIRED_RISK_FIELDS | RETIRED_EXECUTION_FIELDS | RETIRED_STRATEGY_FIELDS
             return {key: value for key, value in values.items() if key not in retired}
         return values
 
@@ -87,10 +88,6 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def compatible(self):
-        if self.strategy_model == "price_action" and self.execution_mode != "intraday":
-            raise ValueError("裸 K 策略须使用盘中自动执行")
-        if self.retain_rank < self.max_positions:
-            raise ValueError("保留排名不得小于最大持仓数")
         if self.max_weight > self.max_exposure:
             raise ValueError("单只上限不得超过总仓上限")
         return self
@@ -102,9 +99,6 @@ CONFIG_LABELS = {
     "max_weight": "单只仓位上限",
     "max_exposure": "总仓位上限",
     "minimum_bars": "最少日 K 数量",
-    "retain_rank": "持仓保留排名",
-    "stop_loss": "成本止损比例",
-    "trailing_stop": "高点回撤止损",
     "commission_rate": "佣金比例",
     "minimum_commission": "最低佣金（元）",
     "participation": "新增成交量参与率",
@@ -119,12 +113,10 @@ CONFIG_LABELS = {
     "pa_min_rr": "裸 K 最低潜在盈亏比",
     "intraday_confirmations": "目标连续确认次数",
     "intraday_min_interval": "同一 ETF 最短操作间隔（秒）",
-    "intraday_drift": "调仓偏离门槛（占总资产）",
     "intraday_max_orders": "每只 ETF 每日最多订单数",
     "intraday_order_ttl": "盘中未成交订单有效期（秒）",
     "intraday_t_enabled": "底仓做 T",
     "intraday_t_model": "做 T 信号周期",
-    "intraday_t_trigger": "做 T 卖出涨幅／买回回落幅度",
     "intraday_t_fraction": "每次做 T 使用的持仓比例",
     "intraday_t_cycles": "每只 ETF 每日最多做 T 轮数",
 }

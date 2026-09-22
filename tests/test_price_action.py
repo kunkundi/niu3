@@ -1,4 +1,3 @@
-import math
 import unittest
 from dataclasses import replace
 from datetime import timedelta
@@ -15,18 +14,9 @@ from app.strategies.price_action import STRATEGY, build_plan, price_decision, tr
 from app.trading.account import reconcile
 from app.trading.actions import adjust_pa_reference
 from app.trading.intraday import IntradayTrader, live_problem
-from tests.helpers import Fixture, at, bars
+from tests.helpers import Fixture, at, bars, candles
 
 
-def candles():
-    history = []
-    for i, b in enumerate(bars()):
-        p = 1 + i * 0.002 + math.sin(i * 0.6) * 0.025
-        history.append(
-            replace(b, open=str(p - 0.004), close=str(p + 0.004), high=str(p + 0.012), low=str(p - 0.012))
-        )
-    history[-1] = replace(history[-1], open="1.3", close="1.305", high="1.31", low="1.24")
-    return history
 
 
 class PriceActionTests(unittest.TestCase):

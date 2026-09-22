@@ -152,7 +152,7 @@ class ApiTests(unittest.TestCase):
         mutations = (
             ("POST", "/etfs", {"code": "510500"}),
             ("DELETE", "/etfs/sh510300", None),
-            ("PATCH", "/config", {"stop_loss": ".04"}),
+            ("PATCH", "/config", {"max_weight": ".04"}),
             ("PATCH", "/notifications/config", {}),
             ("POST", "/notifications/test/feishu", {}),
             ("POST", "/auth/password", {"current_password": "old", "new_password": "1", "confirm_password": "1"}),
@@ -211,11 +211,11 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(bad.status_code, 422)
         bad = self.client.patch("/api/v1/config", json={"undeclared": True}, headers=self.headers)
         self.assertEqual(bad.status_code, 422)
-        result = self.client.patch("/api/v1/config", json={"stop_loss": ".04"}, headers=self.headers)
+        result = self.client.patch("/api/v1/config", json={"max_weight": ".04"}, headers=self.headers)
         self.assertEqual(result.status_code, 200)
         config = self.client.get("/api/v1/config").json()
         self.assertEqual(config["version"], 2)
-        self.assertEqual(config["values"]["stop_loss"], "0.04")
+        self.assertEqual(config["values"]["max_weight"], "0.04")
 
     def test_display_frequency_is_persisted_validated_and_does_not_reset_trading(self):
         self.login()
@@ -258,14 +258,14 @@ class ApiTests(unittest.TestCase):
         self.login()
         result = self.client.patch(
             "/api/v1/config",
-            json={"execution_mode": "intraday", "intraday_t_enabled": False, "intraday_t_trigger": "0.015"},
+            json={"execution_mode": "intraday", "intraday_t_enabled": False, "intraday_t_fraction": "0.15"},
             headers=self.headers,
         )
         self.assertEqual(result.status_code, 200)
         config = self.client.get("/api/v1/config").json()
         self.assertEqual(config["values"]["execution_mode"], "intraday")
         self.assertIs(config["values"]["intraday_t_enabled"], False)
-        self.assertEqual(config["values"]["intraday_t_trigger"], "0.015")
+        self.assertEqual(config["values"]["intraday_t_fraction"], "0.15")
         self.assertIn("13:00", config["execution_window"])
         self.assertEqual(self.client.get("/api/v1/signals").json()["mode"], "live")
         self.assertEqual(self.client.get("/api/v1/status").json()["execution_mode"], "intraday")
@@ -295,7 +295,7 @@ class ApiTests(unittest.TestCase):
         self.login()
         self.assertEqual(
             self.client.patch(
-                "/api/v1/config", json={"strategy_model": "price_action"}, headers=self.headers
+                "/api/v1/config", json={"strategy_model": "momentum"}, headers=self.headers
             ).status_code,
             422,
         )
@@ -306,7 +306,7 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.get("/api/v1/config").json()["values"]["pa_min_rr"], "1.8")
-        self.assertEqual(self.client.get("/api/v1/status").json()["strategy"], "裸 K 价格行为 v2")
+        self.assertEqual(self.client.get("/api/v1/status").json()["strategy"], "裸 K 价格行为")
         self.assertEqual(self.client.get("/api/v1/signals").json()["strategy_model"], "price_action")
         before = self.f.rows("configs")
         response = self.client.patch(
@@ -339,9 +339,11 @@ class ApiTests(unittest.TestCase):
     def test_signal_rows_wait_for_plan_using_current_strategy_setting(self):
         from app.storage.db import dump
         from app.strategies.focus import FOCUS_POLICY
+        from app.strategies.price_action import STRATEGY
 
         payload = {
             "focus_policy": FOCUS_POLICY,
+            "strategy": STRATEGY,
             "rows": [{"symbol": "sh510300"}],
             "targets": {"sh510300": ".2"},
         }
@@ -351,9 +353,9 @@ class ApiTests(unittest.TestCase):
                 ("2026-09-04", "2026-09-07", "2026-09-04T15:30:00+08:00", dump(payload)),
             )
         self.login()
-        self.assertEqual(len(self.client.get("/api/v1/signals").json()["rows"]), 1)
+        self.assertEqual(len(self.client.get("/api/v1/signals?mode=daily").json()["rows"]), 1)
         self.client.patch("/api/v1/config", json={"max_exposure": "0.60"}, headers=self.headers)
-        signals = self.client.get("/api/v1/signals").json()
+        signals = self.client.get("/api/v1/signals?mode=daily").json()
         self.assertEqual(signals["rows"], [])
         self.assertEqual(signals["targets"], {})
         self.assertEqual(signals["focus"]["mode"], "manual")
@@ -363,10 +365,12 @@ class ApiTests(unittest.TestCase):
     def test_signals_use_latest_quotes_without_changing_frozen_plan(self):
         from app.storage.db import dump
         from app.strategies.focus import FOCUS_POLICY
+        from app.strategies.price_action import STRATEGY
 
         symbols = ["sh510300", "sh510500", "sh512000", "sh512001", "sh512002"]
         payload = {
             "focus_policy": FOCUS_POLICY,
+            "strategy": STRATEGY,
             "as_of": "2026-09-04",
             "input_sha256": "frozen-evidence",
             "rows": [
@@ -384,7 +388,7 @@ class ApiTests(unittest.TestCase):
         self.f.quote(price="0.980", symbol=symbols[1])
         self.f.quote(at("2026-09-04T15:00:00"), price="1.000", symbol=symbols[2])
         self.f.quote(symbol=symbols[4], previous_close=0)
-        first = self.client.get("/api/v1/signals").json()
+        first = self.client.get("/api/v1/signals?mode=daily").json()
         quotes = [row["quote"] for row in first["rows"]]
         self.assertAlmostEqual(quotes[0]["change_pct"], 0.025)
         self.assertFalse(quotes[0]["stale"])
@@ -397,7 +401,7 @@ class ApiTests(unittest.TestCase):
 
         latest = self.f.quote(price="1.040")
         self.f.quote(at("2026-09-07T09:34:55"), price="0.990")
-        updated = self.client.get("/api/v1/signals").json()
+        updated = self.client.get("/api/v1/signals?mode=daily").json()
         self.assertEqual(updated["id"], first["id"])
         self.assertEqual(updated["as_of"], payload["as_of"])
         self.assertEqual(updated["targets"], payload["targets"])

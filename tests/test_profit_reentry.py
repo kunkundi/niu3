@@ -215,8 +215,7 @@ class ProfitReentryTests(unittest.TestCase):
         before = {t: self.f.rows(t) for t in ("fills", "cooldown", "cash_ledger", "orders")}
         with self.f.db.transaction() as conn:
             self.assertNotIn("sh510300", cooling_symbols(conn, "2026-09-08", self.config))
-            self.assertIn("sh510300", cooling_symbols(conn, "2026-09-08",
-                                                       self.config.model_copy(update={"strategy_model": "momentum"})))
+
         self.assertEqual(before, {t: self.f.rows(t) for t in before})
         with self.f.db.transaction() as conn:
             conn.execute("INSERT INTO risk_intents VALUES(?,?,?)", ("sh510300", "结构止损", iso(self.now)))

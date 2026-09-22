@@ -5,12 +5,13 @@ from datetime import timedelta
 from unittest.mock import Mock
 
 from app.automation.service import Worker
+from app.automation.targets import calculate_targets
 from app.core.types import iso
-from app.storage.db import set_state, dump
+from app.storage.db import set_state
 from app.storage.maintenance import retain_evidence
 from app.trading.account import reconcile
 from app.trading.engine import Engine
-from tests.helpers import Fixture, at, bars
+from tests.helpers import Fixture, at, candles
 
 
 class WorkflowTests(unittest.TestCase):
@@ -24,26 +25,29 @@ class WorkflowTests(unittest.TestCase):
 
     def prepare(self, now):
         # Bar prices intentionally differ from live prices: orders must use live execution inputs.
-        history = bars()
+        history = candles()
         self.worker.ingest("history:sh510300", {"raw": history, "qfq": history}, now)
         with self.f.db.transaction() as conn:
             set_state(conn, "profile:sh510300", {"at": iso(now)})
             set_state(conn, "catalog", {"at": iso(now), "total": 1})
             set_state(conn, "actions:sh510300", {"at": iso(now)})
-        self.f.quote(now - timedelta(seconds=10))
+        self.f.quote(now - timedelta(seconds=10), price="1.007")
 
     def test_two_day_buy_hold_exit_restart_and_frozen_inputs(self):
         now = at()
         self.prepare(now)
-        self.worker.tick(now, network=False)
-        plans = self.f.rows("plans")
-        self.assertEqual(len(plans), 1)
-        self.assertEqual(len(self.f.rows("orders")), 1)
-        self.f.quote(now + timedelta(seconds=30), volume=4_000_000)
-        self.worker.tick(now + timedelta(seconds=30), network=False)
+        for seconds in (0, 60):
+            observed = now + timedelta(seconds=seconds)
+            self.f.quote(observed, price="1.007")
+            self.worker.ingest("live_targets", calculate_targets(self.f.db, "2026-09-04", observed), observed)
+            self.worker.tick(observed, network=False)
+        self.assertEqual(len(self.f.rows("plans")), 1)
+        self.assertEqual([o["kind"] for o in self.f.rows("orders")], ["intraday"])
+        self.f.quote(now + timedelta(seconds=90), price="1.007", volume=4_000_000)
+        self.worker.tick(now + timedelta(seconds=90), network=False)
         self.assertEqual(len(self.f.rows("fills")), 1)
         self.assertEqual(self.f.rows("fills")[0]["side"], "BUY")
-        self.worker.tick(now + timedelta(seconds=35), network=False)
+        self.worker.tick(now + timedelta(seconds=95), network=False)
         self.assertEqual(len(self.f.rows("orders")), 1)
         with self.f.db.connect() as conn:
             inputs = json.loads(
@@ -66,73 +70,32 @@ class WorkflowTests(unittest.TestCase):
         with self.f.db.connect() as conn:
             self.assertEqual(reconcile(conn), [])
 
-    def test_missed_window_never_backfills_a_trade(self):
+    def test_daily_snapshot_never_trades_without_confirmed_live_signal(self):
         now = at("2026-09-07T10:01:00")
         self.prepare(now)
         self.worker.tick(now, network=False)
         self.assertEqual(len(self.f.rows("plans")), 1)
         self.assertEqual(self.f.rows("orders"), [])
 
-    def test_opening_data_delay_retries_automatically_after_restart(self):
+    def test_data_delay_retries_with_fresh_confirmations_after_restart(self):
+        from app.trading.intraday import IntradayTrader
         now = at()
         self.prepare(now)
-        self.worker.tick(now, network=False)
-        # Reproduce a fresh opening attempt with the market temporarily below coverage.
         with self.f.db.transaction() as conn:
-            conn.execute("DELETE FROM orders")
-            conn.execute("DELETE FROM slots")
             set_state(conn, "buy_ready", False)
-        plan_id = self.f.rows("plans")[0]["id"]
-        self.f.engine.rebalance(plan_id, now)
+        self.worker.ingest("live_targets", calculate_targets(self.f.db, "2026-09-04", now), now)
+        self.worker.intraday.tick(now)
         self.assertEqual(self.f.rows("orders"), [])
-        self.assertEqual(self.f.rows("slots")[0]["status"], "waiting")
-        later = now + timedelta(minutes=1)
-        self.f.quote(later)
+        restarted = IntradayTrader(Engine(self.f.db, self.f.calendar))
         with self.f.db.transaction() as conn:
             set_state(conn, "buy_ready", True)
-        restarted = Engine(self.f.db, self.f.calendar)
-        restarted.rebalance(plan_id, later)
-        restarted.rebalance(plan_id, later + timedelta(seconds=1))
+        for seconds in (60, 120):
+            later = now + timedelta(seconds=seconds)
+            self.f.quote(later, price="1.007")
+            self.worker.ingest("live_targets", calculate_targets(self.f.db, "2026-09-04", later), later)
+            restarted.tick(later)
+        restarted.tick(later + timedelta(seconds=1))
         self.assertEqual(len(self.f.rows("orders")), 1)
-        self.assertEqual(self.f.rows("slots")[0]["status"], "done")
-
-    def test_deferred_buy_does_not_duplicate_sell_or_trade_after_window(self):
-        from dataclasses import replace
-        from app.storage.db import put_instrument
-        from app.strategies.focus import FOCUS_POLICY
-
-        self.f.buy()
-        now = at("2026-09-08T09:35:00")
-        other = replace(self.f.instrument, symbol="sh510500", index_id="中证500指数")
-        with self.f.db.transaction() as conn:
-            put_instrument(conn, other)
-            set_state(conn, "buy_ready", False)
-            cursor = conn.execute(
-                "INSERT INTO plans(as_of,execute_day,config_id,at,payload) VALUES(?,?,1,?,?)",
-                (
-                    "2026-09-07",
-                    "2026-09-08",
-                    iso(now),
-                    dump(
-                        {
-                            "targets": {other.symbol: "0.2"},
-                            "focus_policy": FOCUS_POLICY,
-                        }
-                    ),
-                ),
-            )
-            plan_id = cursor.lastrowid
-        self.f.quote(now)
-        self.f.quote(now, symbol=other.symbol)
-        self.f.engine.rebalance(plan_id, now)
-        self.f.engine.rebalance(plan_id, now + timedelta(seconds=1))
-        sells = [o for o in self.f.rows("orders") if o["side"] == "SELL"]
-        self.assertEqual(len(sells), 1)
-        self.assertEqual(self.f.rows("slots")[0]["status"], "waiting")
-        with self.f.db.transaction() as conn:
-            set_state(conn, "buy_ready", True)
-        self.f.engine.rebalance(plan_id, now.replace(hour=10))
-        self.assertEqual(len(self.f.rows("orders")), 2)  # Original buy and one exit only.
 
     def test_only_one_worker_lease(self):
         other = Worker(self.f.db, self.f.calendar, Mock())

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from app.automation.service import readiness, history_target
 from app.automation.status import automation_status
 from app.core.calendar import Calendar
+from app.strategies.price_action import STRATEGY
 from app.core.config import CONFIG_LABELS, ROOT, data_dir, DisplaySettings, REMOVED_POOL_FIELDS, RETIRED_RISK_FIELDS
 from app.core.types import Instrument, iso, now_cn, units, yuan, dec, dt, symbol_for
 from app.dashboard.security import (
@@ -270,9 +271,7 @@ def create_app(
                     "session_open": calendar.session(now),
                     "display_day": expected_day(calendar, now),
                     "automation": automation_status(conn, calendar, now, data),
-                    "strategy": "裸 K 价格行为 v2"
-                    if config.strategy_model == "price_action"
-                    else "趋势动量轮动 v1",
+                    "strategy": "裸 K 价格行为",
                     "strategy_model": config.strategy_model,
                     "execution_mode": config.execution_mode,
                     "intraday_t_enabled": config.intraday_t_enabled,
@@ -544,7 +543,7 @@ def create_app(
             config_id, config = settings(conn)
             waiting_post_close = False
             if mode in {"auto", "post_close"}:
-                mode = "live" if config.execution_mode == "intraday" else "daily"
+                mode = "live"
                 if mode == "live" and post_close_window(calendar, now):
                     preview = post_close_payload(conn, calendar, now, config_id, config)
                     if preview:
@@ -568,6 +567,7 @@ def create_app(
                     payload.get("id")
                     and payload.get("config_id") == config_id
                     and payload.get("focus_policy") == FOCUS_POLICY
+                    and payload.get("strategy") == STRATEGY
                     and basis
                     and payload.get("as_of") == basis
                     and created
@@ -596,12 +596,8 @@ def create_app(
                     if session_snapshot
                     else "非交易时段，等待生成盘中结果；开盘后自动更新交易信号。",
                     "stale": "当前交易信号正在更新，后台会自动重试。",
-                    "live": "盘中参考目标自动重算；正式调仓以收盘计划为准。",
+                    "live": "裸 K 自动交易已启用：完整日 K 确定结构，盘中触发并复核买卖。",
                 }[update_state]
-                if config.execution_mode == "intraday" and update_state == "live":
-                    message = "盘中自动交易已启用：目标连续确认后自动买卖。"
-                    if config.strategy_model == "price_action":
-                        message = "裸 K 自动交易已启用：完整日 K 确定结构，盘中触发并复核买卖。"
                 if not valid:
                     payload = {"id": None, "rows": [], "targets": {}}
                 if waiting_post_close:
@@ -631,6 +627,7 @@ def create_app(
                 not row
                 or row["config_id"] != config_id
                 or json.loads(row["payload"]).get("focus_policy") != FOCUS_POLICY
+                or json.loads(row["payload"]).get("strategy") != STRATEGY
             ):
                 return {
                     "id": None,
@@ -641,23 +638,7 @@ def create_app(
                 }
             payload = json.loads(row["payload"])
             current = row["as_of"] == history_target(calendar, now)
-            slot = conn.execute(
-                "SELECT status FROM slots WHERE key=?", (f"rebalance:{row['execute_day']}",)
-            ).fetchone()
-            orders = conn.execute("SELECT COUNT(*) FROM orders WHERE plan_id=?", (row["id"],)).fetchone()[0]
-            execution_message = (
-                f"已提交 {orders} 笔模拟调仓订单，成交结果见模拟账户。"
-                if orders
-                else "数据或风控条件未满足，执行窗口内自动重试。"
-                if slot
-                and slot[0] == "waiting"
-                and now.strftime("%Y-%m-%dT%H:%M") < row["execute_day"] + "T10:00"
-                else "本期执行窗口已结束，未生成调仓订单；下个交易日自动评估。"
-                if now.strftime("%Y-%m-%dT%H:%M") >= row["execute_day"] + "T10:00"
-                else "等待交易日 09:35–10:00 自动执行。"
-            )
-            if config.execution_mode == "intraday":
-                execution_message = "当前由盘中目标驱动自动交易；这份收盘计划作为日频参考。"
+            execution_message = "当前由裸 K 盘中信号驱动模拟交易；收盘记录仅供参考，不直接执行。"
             # Live quotes are display data; keep the stored strategy plan and evidence frozen.
             for signal in payload["rows"]:
                 latest = latest_quote(conn, signal["symbol"])
@@ -866,9 +847,7 @@ def create_app(
                 },
                 "labels": CONFIG_LABELS,
                 "initial_cash_locked": bool(conn.execute("SELECT 1 FROM orders LIMIT 1").fetchone()),
-                "execution_window": "交易日 09:30—11:30、13:00—15:00"
-                if value.execution_mode == "intraday"
-                else "交易日 09:35—10:00",
+                "execution_window": "交易日 09:30—11:30、13:00—15:00",
                 "stamp_duty": 0,
                 "transfer_fee": 0,
             }

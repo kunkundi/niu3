@@ -120,6 +120,8 @@ class TradingTests(unittest.TestCase):
             set_state(conn, "actions:sh510300", {"at": iso(start)})
         self.f.buy(start)
         self.assertEqual(self.f.rows("lots")[0]["available_day"], "2026-09-28")
+        with self.f.db.transaction() as conn:
+            set_state(conn, "pa_position:sh510300", {"stop": units(".95")})
         risk_at = start + timedelta(minutes=1)
         self.f.quote(risk_at, price=".940", volume=3_000_000)
         self.f.engine.risk_check(risk_at)

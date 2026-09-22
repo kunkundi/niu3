@@ -6,7 +6,7 @@ from dataclasses import replace
 from contextlib import contextmanager
 from pathlib import Path
 
-from app.core.config import DisplaySettings, RETIRED_EXECUTION_FIELDS, Settings
+from app.core.config import DisplaySettings, RETIRED_EXECUTION_FIELDS, RETIRED_STRATEGY_FIELDS, Settings
 from app.core.types import Instrument, Quote, iso, now_cn, units
 from app.strategies.focus import FOCUS_POLICY
 
@@ -103,6 +103,40 @@ def put_quote(conn, quote: Quote):
     )
 
 
+def migrate_price_action(conn):
+    """Version legacy execution settings once; preserve frozen evidence and account data."""
+    row = conn.execute("SELECT payload FROM configs ORDER BY id DESC LIMIT 1").fetchone()
+    payload = json.loads(row[0])
+    if payload.get("strategy_model") == "price_action" and payload.get("execution_mode") == "intraday":
+        return
+    config = Settings.from_record(payload)
+    at = iso(now_cn())
+    conn.execute("INSERT INTO configs(at,payload) VALUES(?,?)", (at, config.model_dump_json()))
+    conn.execute(
+        "UPDATE orders SET status='cancelled',updated_at=?,blocked_reason='策略已升级为裸 K，等待新信号' "
+        "WHERE status IN ('pending','partial') AND (kind IN ('rebalance','intraday','t_sell','t_buy') "
+        "OR (kind='risk' AND reason IN ('成本止损','持仓高点回撤止损')))", (at,),
+    )
+    conn.execute(
+        "UPDATE t_cycles SET status='abandoned',updated_at=? WHERE status IN ('selling','waiting_buy','buying')",
+        (at,),
+    )
+    conn.execute(
+        "DELETE FROM cooldown WHERE symbol IN "
+        "(SELECT symbol FROM risk_intents WHERE reason IN ('成本止损','持仓高点回撤止损'))"
+    )
+    conn.execute("DELETE FROM risk_intents WHERE reason IN ('成本止损','持仓高点回撤止损')")
+    conn.execute(
+        "DELETE FROM state WHERE key IN ('live_targets','intraday_confirmation','intraday_execution','readiness') "
+        "OR key LIKE 't_anchor:%' OR key LIKE 'pa_position:%'"
+    )
+    set_state(conn, "buy_ready", False)
+    conn.execute(
+        "INSERT INTO runs(task,at,status,detail) VALUES('strategy',?,'ok',?)",
+        (at, "已升级为裸 K 盘中策略；旧未成交意图已取消，历史配置、成交与账本保留"),
+    )
+
+
 class Database:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -138,6 +172,7 @@ class Database:
                     (units(config.initial_cash), at),
                 )
                 set_state(conn, "peak_nav", units(config.initial_cash))
+            migrate_price_action(conn)
             if get_state(conn, "etf_pool_mode") != "manual-v1":
                 # Archive the old automatically discovered directory. Historical account evidence
                 # remains intact; only explicitly added ETFs enter the new watchlist.
@@ -203,6 +238,8 @@ class Database:
     def change_config(self, payload: dict, at):
         if RETIRED_EXECUTION_FIELDS.intersection(payload):
             raise ValueError("额外滑点已移除，不能再配置该参数")
+        if RETIRED_STRATEGY_FIELDS.intersection(payload):
+            raise ValueError("旧策略参数已移除，当前仅支持裸 K 价格行为")
         with self.transaction() as conn:
             version, old = settings(conn)
             display_patch = {
@@ -219,18 +256,6 @@ class Database:
                 set_state(conn, "display_settings", display.model_dump(mode="json"))
             if not strategy_patch:
                 return version
-            if config.strategy_model != old.strategy_model:
-                conn.execute("DELETE FROM state WHERE key LIKE 'pa_position:%'")
-                if config.strategy_model == "price_action":
-                    # Retire percentage-based intents when explicitly switching to structural exits.
-                    conn.execute(
-                        "DELETE FROM cooldown WHERE symbol IN (SELECT symbol FROM risk_intents WHERE reason IN ('成本止损','持仓高点回撤止损'))"
-                    )
-                    conn.execute("DELETE FROM risk_intents WHERE reason IN ('成本止损','持仓高点回撤止损')")
-                    conn.execute(
-                        "UPDATE orders SET status='cancelled',updated_at=?,blocked_reason='切换裸 K 结构风控' WHERE kind='risk' AND reason IN ('成本止损','持仓高点回撤止损') AND status IN ('pending','partial')",
-                        (iso(at),),
-                    )
             if old.initial_cash != config.initial_cash:
                 if conn.execute("SELECT 1 FROM orders LIMIT 1").fetchone():
                     raise ValueError("已有订单，不能改写初始资金")

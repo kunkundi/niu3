@@ -20,7 +20,7 @@ from app.notifications.channels import (
 from app.notifications.config import NotificationPatch, current, save_config
 from app.notifications.service import NotificationDispatcher, enqueue_committed
 from app.storage.db import Database, get_state, set_state
-from app.core.types import iso
+from app.core.types import iso, units
 from app.trading.account import reconcile
 from tests.helpers import Fixture, at
 
@@ -359,6 +359,8 @@ class NotificationTests(unittest.TestCase):
         tomorrow = at("2026-09-08T09:35:00")
         with self.f.db.transaction() as conn:
             set_state(conn, "actions:sh510300", {"at": iso(tomorrow)})
+        with self.f.db.transaction() as conn:
+            set_state(conn, "pa_position:sh510300", {"stop": units(".95")})
         self.f.quote(tomorrow - timedelta(seconds=10), price=".940")
         self.f.engine.risk_check(tomorrow)
         self.f.quote(tomorrow + timedelta(seconds=30), price=".940", volume=2_000_000)
@@ -367,7 +369,7 @@ class NotificationTests(unittest.TestCase):
         message = self.f.rows("notification_deliveries")[-1]["message"]
         self.assertIn("卖出", message)
         self.assertIn("已实现盈亏", message)
-        self.assertIn("成本", message)
+        self.assertIn("结构失效", message)
 
     def test_large_batch_splits_without_dropping_fills(self):
         self.configure()

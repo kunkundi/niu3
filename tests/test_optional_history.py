@@ -14,9 +14,8 @@ from app.core.types import Bar, iso
 from app.market_data.history import enrich_metrics, merge_history, signature, validate_series
 from app.market_data.providers import DataError, PublicProvider, SourceCooling
 from app.storage.db import get_state, set_state
-from app.strategies.momentum import build_plan as momentum_plan
 from app.strategies.price_action import analysis_request, build_plan
-from tests.helpers import Fixture, at, bars
+from tests.helpers import Fixture, at
 from tests.test_price_action import candles
 
 
@@ -192,21 +191,6 @@ class OptionalHistoryTests(unittest.TestCase):
         self.assertEqual(list(first["targets"]), [self.f.instrument.symbol])
         self.assertTrue(first["rows"][0]["eligible"])
 
-    def test_momentum_does_not_require_amount_or_use_it_to_break_ties(self):
-        second = replace(self.f.instrument, symbol="sh510310")
-        histories = {
-            self.f.instrument.symbol: [replace(b, amount=None) for b in bars()],
-            second.symbol: bars(amount="99999999999"),
-        }
-        plan = momentum_plan(
-            [second, self.f.instrument],
-            histories,
-            set(),
-            "2026-09-04",
-            "2026-09-07",
-            Settings(max_positions=1),
-        )
-        self.assertEqual(list(plan["targets"]), [self.f.instrument.symbol])
 
 
 if __name__ == "__main__":

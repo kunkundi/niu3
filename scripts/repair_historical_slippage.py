@@ -117,7 +117,7 @@ def make_plan(conn, through_fill_id):
     instruments = {row["symbol"]: json.loads(row["payload"]) for row in source["instruments"]}
     configs = {row["id"]: json.loads(row["payload"]) for row in source["configs"]}
     orders = {row["id"]: row for row in source["orders"]}
-    order_configs = {key: Settings.model_validate(configs[order["config_id"]]) for key, order in orders.items()}
+    order_configs = {key: Settings.from_record(configs[order["config_id"]]) for key, order in orders.items()}
     repriced = []
     for fill in fills:
         require(fill["quantity"] > 0 and fill["side"] in ("BUY", "SELL"), "无效成交")

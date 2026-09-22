@@ -67,9 +67,7 @@ const data = ref({ rows: [], targets: {} }),
   filter = ref('selected'),
   page = ref(0),
   loading = ref(false)
-const mode = computed(
-  () => data.value.mode || (state.status.execution_mode === 'intraday' ? 'live' : 'daily'),
-)
+const mode = computed(() => data.value.mode || 'live')
 const postClose = computed(() => mode.value === 'post_close')
 const groups = computed(() => signalWatchlistGroups(data.value, state.account?.positions || []))
 const candidateRows = computed(() => groups.value.candidates)
@@ -117,15 +115,8 @@ watch(mobile, (value) => {
 const targetExposure = computed(() =>
   Object.values(data.value.targets || {}).reduce((total, weight) => total + Number(weight), 0),
 )
-const isPa = computed(
-  () =>
-    data.value.strategy?.startsWith('price-action-') ||
-    (!data.value.strategy && state.status.strategy_model === 'price_action'),
-)
 const strategyName = computed(() =>
-  isPa.value
-    ? `裸 K 价格行为 ${data.value?.strategy?.startsWith('price-action-') ? data.value.strategy.split('-').at(-1) : 'v2'}`
-    : '趋势动量轮动 v1',
+  `裸 K 价格行为 ${data.value?.strategy?.startsWith('price-action-') ? data.value.strategy.split('-').at(-1) : ''}`.trim(),
 )
 function level(row, key) {
   if (postClose.value) return row.pa?.[key] > 0 ? money(row.pa[key], 3) : '—'
@@ -386,10 +377,10 @@ onUnmounted(() => {
                   <th class="number-cell" title="最新价相对昨收的涨跌幅">实时涨幅</th>
                   <th class="number-cell">{{ postClose ? '参考状态' : '目标仓位' }}</th>
                   <th class="number-cell">
-                    {{ isPa ? `入场 / 失效价${postClose ? '（前复权）' : ''}` : '动量评分' }}
+                    {{ `入场 / 失效价${postClose ? '（前复权）' : ''}` }}
                   </th>
                   <th class="number-cell">
-                    {{ isPa ? `支撑 / 压力${postClose ? '（前复权）' : ''}` : '20 日 / 60 日收益' }}
+                    {{ `支撑 / 压力${postClose ? '（前复权）' : ''}` }}
                   </th>
                   <th>关注类型</th>
                   <th class="number-cell">20 日日均成交额</th>
@@ -432,18 +423,11 @@ onUnmounted(() => {
                         : pct(row.target_weight)
                     }}</span>
                   </td>
-                  <td v-if="isPa" class="number-cell">
+                  <td class="number-cell">
                     {{ level(row, 'entry') }}<small>{{ level(row, 'entry_stop') }}</small>
                   </td>
-                  <td v-else class="number-cell">
-                    {{ row.score != null ? money(Number(row.score) * 100) : '—' }}
-                  </td>
-                  <td v-if="isPa" class="number-cell">
+                  <td class="number-cell">
                     {{ level(row, 'support') }}<small>{{ level(row, 'resistance') }}</small>
-                  </td>
-                  <td v-else class="number-cell">
-                    <span :class="changeClass(row.r20)">{{ pct(row.r20, true) }}</span
-                    ><small :class="changeClass(row.r60)">{{ pct(row.r60, true) }}</small>
                   </td>
                   <td>
                     {{ row.focus_label
@@ -453,8 +437,8 @@ onUnmounted(() => {
                   <td class="number-cell">{{ amount(row.amount20) }}</td>
                   <td class="number-cell" :title="row.turnover_reason">{{ pct(row.turnover20) }}</td>
                   <td class="reason-cell">
-                    {{ row.reasons.length ? row.reasons.join('；') : '趋势与流动性达标，动量排名入选' }}
-                    <small v-if="isPa && row.pa?.ready">
+                    {{ row.reasons.length ? row.reasons.join('；') : '裸 K 形态与盘中触发条件已满足' }}
+                    <small v-if="row.pa?.ready">
                       {{ row.pa.setup || '等待入场形态' }} · 可知日 {{ row.pa.signal_day || '—' }} · 目标
                       {{ level(row, 'target') }} · 摆动失效 {{ level(row, 'structural_stop') }}
                     </small>
@@ -506,33 +490,21 @@ onUnmounted(() => {
         <summary>
           策略说明 <span>{{ strategyName }} · 计算规则</span><Icon name="chevron" :size="15" />
         </summary>
-        <section v-if="isPa" class="strategy-banner">
+        <section class="strategy-banner">
           <div>
             <div class="section-kicker">日 K 结构 / 盘中执行</div>
             <h2>{{ strategyName }}</h2>
             <p>依据 Pin Bar、吞没、Inside / Outside Bar、BOS / CHoCH、摆动点与支撑压力识别交易机会。</p>
-            <p>已收盘日 K 形成条件，盘中突破触发；最低盈亏比与追价上限过滤入场，结构失效或到达目标退出。</p>
+            <p>
+              已收盘日 K
+              形成条件，盘中突破触发；最低盈亏比与追价上限过滤入场，结构失效退出，到达目标后等待分钟 K
+              确认转弱止盈。
+            </p>
             <p>
               做 T：压力位卖出部分可卖底仓，回到支撑且未失效时买回；价差须覆盖费用。各 ETF
               的可卖份额、仓位上限和操作间隔继续生效。
             </p>
-            <p>
-              采用日 K，不生成未完成的日线或分钟 K；摆动点等待右侧 3 根 K
-              线确认。无信号时持仓或持币，不按动量排名调仓。
-            </p>
-          </div>
-        </section>
-        <section v-else class="strategy-banner">
-          <div>
-            <div class="section-kicker">策略模型 / MOMENTUM</div>
-            <h2>趋势动量轮动 <span>v1</span></h2>
-            <p>手动 ETF 名单 → 交易资格与数据检查 → 趋势过滤 → 动量排名</p>
-          </div>
-          <div class="strategy-formula">
-            <span>动量评分</span><strong>60% × R₂₀ + 40% × R₆₀</strong
-            ><small>{{
-              mode === 'live' ? '完整日 K + 最新价格；流动性使用完整交易日' : '仅使用已完成交易日数据'
-            }}</small>
+            <p>采用日 K，不生成未完成的日线或分钟 K；摆动点等待右侧 3 根 K 线确认。无信号时持仓或持币。</p>
           </div>
         </section>
       </details>

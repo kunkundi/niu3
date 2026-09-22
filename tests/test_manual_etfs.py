@@ -25,9 +25,9 @@ from app.storage.db import (
 )
 from app.storage.focus import focus_snapshot
 from app.strategies.focus import select_focus
-from app.strategies.momentum import build_plan
+from app.strategies.price_action import build_plan
 from app.trading.account import reconcile
-from tests.helpers import Fixture, at, bars
+from tests.helpers import Fixture, at, bars, candles
 
 
 class ManualPoolTests(unittest.TestCase):
@@ -52,8 +52,8 @@ class ManualPoolTests(unittest.TestCase):
         config = Settings(
             minimum_amount="999999999999", minimum_turnover="1", focus_categories=[], focus_markets=[]
         )
-        history = {self.a.symbol: bars(amount="100"), self.b.symbol: bars(amount="10")}
-        plan = build_plan([self.a, self.b], history, set(), "2026-09-04", "2026-09-07", config)
+        history = {self.a.symbol: [replace(b, amount="100") for b in candles()], self.b.symbol: [replace(b, amount="10") for b in candles()]}
+        plan = build_plan([self.a, self.b], history, set(), "2026-09-04", "2026-09-07", config, live_prices={s: Decimal(h[-1].close)*Decimal("1.007") for s,h in history.items()})
         self.assertEqual(set(plan["targets"]), {self.a.symbol, self.b.symbol})
         self.assertTrue(all(r["representative"] for r in plan["rows"]))
         self.assertTrue(all(r["turnover20"] is None for r in plan["rows"]))
@@ -64,15 +64,15 @@ class ManualPoolTests(unittest.TestCase):
         cases = (
             (replace(self.b, verified=False, active=False), {}, set()),
             (self.b, {self.a.symbol: bars(count=10)}, set()),
-            (self.b, {self.a.symbol: bars()}, {self.a.symbol}),
-            (replace(self.b, watched=False), {self.a.symbol: bars(), self.b.symbol: bars()}, {self.a.symbol}),
+            (self.b, {self.a.symbol: candles()}, {self.a.symbol}),
+            (replace(self.b, watched=False), {self.a.symbol: candles(), self.b.symbol: candles()}, {self.a.symbol}),
         )
         for other, history, targets in cases:
             with self.subTest(other=other, history=list(history)):
                 rows = select_focus([self.a, other], history, "2026-09-04")
                 self.assertTrue(rows[self.a.symbol]["representative"])
                 self.assertEqual(rows[other.symbol]["representative"], other.watched)
-                plan = build_plan([self.a, other], history, set(), "2026-09-04", "2026-09-07", Settings())
+                plan = build_plan([self.a, other], history, set(), "2026-09-04", "2026-09-07", Settings(), live_prices={s: Decimal(h[-1].close)*Decimal("1.007") for s,h in history.items()})
                 self.assertEqual(set(plan["targets"]), targets)
                 self.assertTrue(all(row["reasons"] for row in plan["rows"] if row["symbol"] not in targets))
 

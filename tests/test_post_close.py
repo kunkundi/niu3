@@ -174,10 +174,11 @@ class PostCloseTests(unittest.TestCase):
         self.ingest_history()
         self.assertIsNone(self.signal()["id"])
 
-    def test_explicit_daily_mode_and_daily_execution_keep_their_frozen_plan(self):
+    def test_explicit_daily_snapshot_remains_read_only(self):
         daily = self.client.get("/api/v1/signals?mode=daily").json()
         self.assertEqual(daily["mode"], "daily")
         self.assertEqual(daily["id"], self.f.rows("plans")[0]["id"])
-        self.f.db.change_config({"strategy_model": "momentum", "execution_mode": "daily"}, self.now)
-        self.worker.tick(self.now, network=False)
-        self.assertEqual(self.signal()["mode"], "daily")
+        before = {t: self.f.rows(t) for t in ("orders", "fills", "configs")}
+        self.assertIn("不直接执行", daily["execution_message"])
+        self.assertEqual(self.signal()["mode"], "post_close")
+        self.assertEqual(before, {t: self.f.rows(t) for t in before})

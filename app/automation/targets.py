@@ -4,7 +4,7 @@ import json
 
 from app.core.types import Bar, dec, iso
 from app.storage.db import tracked_instruments, latest_quote, settings
-from app.strategies.momentum import build_plan
+from app.strategies.price_action import build_plan
 from app.strategies.profit import cooling_symbols, latest_profit_sale, reentry_setup
 
 
@@ -41,42 +41,38 @@ def calculate_targets(db, as_of, now):
                 quote_times[symbol] = quote.at
                 factors[symbol] = dec(quote.previous_close) / 1_000_000 / dec(history[-1].close)
                 quotes[symbol] = quote
-    builder = build_plan
-    if config.strategy_model == "price_action":
-        from app.strategies.price_action import build_plan as builder
-    plan = builder(list(universe.values()), histories, held, as_of, "", config, cooldown, prices)
+    plan = build_plan(list(universe.values()), histories, held, as_of, "", config, cooldown, prices)
     for row in plan["rows"]:
         row["evaluated_quote_at"] = quote_times.get(row["symbol"])
         if row.get("pa", {}).get("ready") and row["symbol"] in factors:
             from app.strategies.price_action import raw_levels
 
             row["pa"]["raw"] = raw_levels(row["pa"], factors[row["symbol"]], universe[row["symbol"]].tick)
-    if config.strategy_model == "price_action":
-        from app.strategies.price_action import select_targets
+    from app.strategies.price_action import select_targets
 
-        with db.connect() as conn:
-            for row in plan["rows"]:
-                symbol = row["symbol"]
-                if symbol in cooldown:
-                    row["reasons"].append("当日结构止损冷却，禁止再入场")
-                if (symbol in cooldown or symbol not in quotes
-                        or not universe[symbol].tradable or not row["representative"]):
-                    continue
-                sale = latest_profit_sale(conn, symbol, now)
-                if not sale or (symbol in held and not sale.get("pending")):
-                    continue
-                pa, reason = reentry_setup(conn, universe[symbol], row.get("pa", {}), sale,
-                                          quotes[symbol], config, now, factors[symbol])
-                # A profit sale consumes the old setup; require a new intraday breakout.
-                row["eligible"] = bool(pa)
-                row["rank"] = None
-                row["reasons"] = [reason]
-                if pa:
-                    row["pa"] = pa
-                elif row["pa"].get("action") != "exit":
-                    row["pa"]["action"] = "hold"
-            plan["targets"] = select_targets(plan["rows"], held, config)
-            plan["rows"].sort(key=lambda r: (r["rank"] or 100000, r["symbol"]))
+    with db.connect() as conn:
+        for row in plan["rows"]:
+            symbol = row["symbol"]
+            if symbol in cooldown:
+                row["reasons"].append("当日结构止损冷却，禁止再入场")
+            if (symbol in cooldown or symbol not in quotes
+                    or not universe[symbol].tradable or not row["representative"]):
+                continue
+            sale = latest_profit_sale(conn, symbol, now)
+            if not sale or (symbol in held and not sale.get("pending")):
+                continue
+            pa, reason = reentry_setup(conn, universe[symbol], row.get("pa", {}), sale,
+                                      quotes[symbol], config, now, factors[symbol])
+            # A profit sale consumes the old setup; require a new intraday breakout.
+            row["eligible"] = bool(pa)
+            row["rank"] = None
+            row["reasons"] = [reason]
+            if pa:
+                row["pa"] = pa
+            elif row["pa"].get("action") != "exit":
+                row["pa"]["action"] = "hold"
+        plan["targets"] = select_targets(plan["rows"], held, config)
+        plan["rows"].sort(key=lambda r: (r["rank"] or 100000, r["symbol"]))
     representatives = [
         row for row in plan["rows"] if row["representative"] and universe[row["symbol"]].tradable
     ]
@@ -91,7 +87,5 @@ def calculate_targets(db, as_of, now):
         "representative_count": len(representatives),
         "missing_quotes": missing,
         "refresh_seconds": config.market_interval,
-        "message": "盘中目标自动重算，连续确认后按盘中交易规则执行。"
-        if config.execution_mode == "intraday"
-        else "盘中参考目标自动重算；正式调仓以收盘计划为准。",
+        "message": "盘中目标自动重算，连续确认后按盘中交易规则执行。",
     }

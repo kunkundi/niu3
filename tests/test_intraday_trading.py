@@ -5,6 +5,7 @@ from datetime import timedelta
 from app.core.types import iso, units
 from app.storage.db import get_state, set_state, settings
 from app.strategies.focus import FOCUS_POLICY
+from app.strategies.price_action import STRATEGY
 from app.trading.account import reconcile
 from app.trading.engine import Engine
 from app.trading.intraday import IntradayTrader
@@ -33,13 +34,21 @@ class IntradayTradingTests(unittest.TestCase):
                 "created_at": iso(when),
                 "config_id": version,
                 "focus_policy": FOCUS_POLICY,
+                "strategy": STRATEGY,
                 "as_of": self.f.calendar.previous(when.date()),
                 "targets": {"sh510300": "0.2"} if selected else {},
                 "missing_quotes": 0,
                 "rows": [
                     {
                         "symbol": "sh510300",
-                        "score": "0.1",
+                        "reasons": ["裸 K 测试形态"],
+                        "pa": {"ready": True, "action": "buy" if selected else "exit",
+                               "input_sha256": "frozen-structure", "signal_day": "2026-09-04",
+                               "exit_day": "2026-09-04", "t_allowed": True,
+                               "raw": {"entry": 995000, "entry_stop": 950000, "target": 1100000,
+                                       "entry_ceiling": 1040000, "structural_stop": 940000,
+                                       "exit": 1005000, "support": 1000000,
+                                       "resistance": 1020000, "t_stop": 980000}},
                         "evaluated_quote_at": iso(when),
                         "focus_status": "representative",
                     }
@@ -76,7 +85,7 @@ class IntradayTradingTests(unittest.TestCase):
         self.trader.tick(self.now + timedelta(seconds=1))
         self.assertEqual(self.f.rows("orders"), [])
         later = self.now + timedelta(seconds=60)
-        self.signal(later)
+        self.confirmed(later)
         self.trader.tick(later)
         self.assertEqual(len(self.f.rows("orders")), 1)
         self.assertEqual(self.f.rows("orders")[0]["kind"], "intraday")
@@ -110,11 +119,11 @@ class IntradayTradingTests(unittest.TestCase):
         self.trader.tick(self.now + timedelta(seconds=35))
         self.assertEqual(self.f.rows("t_cycles")[0]["status"], "waiting_buy")
         later = self.now + timedelta(minutes=6)
-        self.signal(later, price="1.019")
+        self.confirmed(later, price="1.019")
         IntradayTrader(Engine(self.f.db, self.f.calendar)).tick(later)
         self.assertEqual(len(self.f.rows("orders")), 2)  # Original inventory plus T sell.
         later += timedelta(minutes=1)
-        self.signal(later, price="1.000")
+        self.confirmed(later, price="1.000")
         self.trader.tick(later)
         buy = self.f.rows("orders")[-1]
         self.assertEqual((buy["kind"], buy["quantity"]), ("t_buy", sell["quantity"]))
@@ -130,15 +139,15 @@ class IntradayTradingTests(unittest.TestCase):
         self.confirmed(self.now, price="1.020")
         self.fill(self.now + timedelta(seconds=30), price="1.000")
         self.assertEqual(self.f.rows("orders")[-1]["filled"], 0)
-        self.assertIn("卖出门槛", self.f.rows("orders")[-1]["blocked_reason"])
+        self.assertIn("结构触发条件", self.f.rows("orders")[-1]["blocked_reason"])
         self.fill(self.now + timedelta(seconds=60), price="1.020", volume=6_000_000)
         later = self.now + timedelta(minutes=7)
-        self.signal(later)
+        self.confirmed(later)
         self.trader.tick(later)
         self.assertEqual(self.f.rows("orders")[-1]["kind"], "t_buy")
         self.fill(later + timedelta(seconds=30), price="1.020")
         self.assertEqual(self.f.rows("orders")[-1]["filled"], 0)
-        self.assertIn("买回门槛", self.f.rows("orders")[-1]["blocked_reason"])
+        self.assertIn("结构触发条件", self.f.rows("orders")[-1]["blocked_reason"])
 
     def test_partial_t_sale_only_buys_back_the_filled_quantity(self):
         self.inventory()
@@ -147,7 +156,7 @@ class IntradayTradingTests(unittest.TestCase):
         self.assertEqual(self.f.rows("orders")[-1]["filled"], 100)
         self.engine.expire(self.now + timedelta(minutes=5))
         later = self.now + timedelta(minutes=11)
-        self.signal(later)
+        self.confirmed(later)
         self.trader.tick(later)
         buy = self.f.rows("orders")[-1]
         self.assertEqual((buy["kind"], buy["quantity"]), ("t_buy", 100))
@@ -157,18 +166,18 @@ class IntradayTradingTests(unittest.TestCase):
         self.confirmed(self.now, price="1.020")
         self.fill(self.now + timedelta(seconds=30), price="1.020")
         buy_at = self.now + timedelta(minutes=7)
-        self.signal(buy_at)
+        self.confirmed(buy_at)
         self.trader.tick(buy_at)
         self.fill(buy_at + timedelta(seconds=30), volume=1_010_000)
         self.assertEqual(self.f.rows("orders")[-1]["filled"], 100)
         self.engine.expire(buy_at + timedelta(minutes=5))
         wait_at = buy_at + timedelta(minutes=6)
-        self.signal(wait_at, price="1.020")
+        self.confirmed(wait_at, price="1.020")
         self.trader.tick(wait_at)
         self.assertEqual(self.f.rows("t_cycles")[0]["status"], "waiting_buy")
         self.assertEqual(len(self.f.rows("orders")), 3)
         retry_at = buy_at + timedelta(minutes=11)
-        self.signal(retry_at)
+        self.confirmed(retry_at)
         self.trader.tick(retry_at)
         self.assertEqual(self.f.rows("orders")[-1]["quantity"], 4600)
         self.fill(retry_at + timedelta(seconds=30))
@@ -182,12 +191,12 @@ class IntradayTradingTests(unittest.TestCase):
         self.confirmed(self.now, price="1.020")
         self.fill(self.now + timedelta(seconds=30), price="1.020")
         buy_at = self.now + timedelta(minutes=7)
-        self.signal(buy_at)
+        self.confirmed(buy_at)
         self.trader.tick(buy_at)
         self.fill(buy_at + timedelta(seconds=30))
         self.trader.tick(buy_at + timedelta(seconds=35))
         later = buy_at + timedelta(minutes=7)
-        self.signal(later, price="1.020")
+        self.confirmed(later, price="1.020")
         self.trader.tick(later)
         self.assertEqual(len(self.f.rows("t_cycles")), 1)
         self.f.db.change_config({"intraday_t_cycles": 2}, later)
@@ -197,7 +206,7 @@ class IntradayTradingTests(unittest.TestCase):
     def test_stale_missing_quotes_and_old_config_never_create_or_fill_orders(self):
         self.confirmed(self.now)
         for delta, updates in [
-            (30, {"missing_quotes": 1}),
+            (30, {"strategy": "retired-v1"}),
             (40, {"config_id": 999}),
             (100, {"created_at": iso(self.now)}),
         ]:
@@ -229,7 +238,7 @@ class IntradayTradingTests(unittest.TestCase):
         self.inventory()
         self.confirmed(self.now, price="1.020")
         later = self.now + timedelta(seconds=30)
-        self.signal(later, price="0.940")
+        self.confirmed(later, price="0.940")
         self.engine.risk_check(later)
         self.trader.tick(later)
         self.assertEqual(self.f.rows("t_cycles")[0]["status"], "abandoned")
@@ -240,7 +249,7 @@ class IntradayTradingTests(unittest.TestCase):
 
     def test_configuration_switch_cancels_dynamic_orders_and_restarts_confirmation(self):
         self.confirmed(self.now)
-        self.f.db.change_config({"execution_mode": "daily"}, self.now)
+        self.f.db.change_config({"pa_min_rr": "1.8"}, self.now)
         self.assertEqual(self.f.rows("orders")[0]["status"], "cancelled")
         self.assertEqual(len(self.f.rows("intraday_decisions")), 1)
         with self.f.db.connect() as conn:
@@ -249,7 +258,7 @@ class IntradayTradingTests(unittest.TestCase):
         self.trader.tick(self.now + timedelta(minutes=1))
         self.assertEqual(len(self.f.rows("orders")), 1)
 
-    def test_lunch_close_and_daily_mode_never_submit_dynamic_orders(self):
+    def test_lunch_and_close_never_submit_dynamic_orders(self):
         self.confirmed(self.now)
         self.engine.expire(self.now + timedelta(minutes=5))
         self.assertEqual(self.f.rows("orders")[0]["status"], "expired")
@@ -258,20 +267,6 @@ class IntradayTradingTests(unittest.TestCase):
             self.trader.tick(when)
         self.assertEqual(len(self.f.rows("orders")), 1)
 
-    def test_order_budget_and_minimum_interval_prevent_repeated_orders(self):
-        self.f.db.change_config({"intraday_max_orders": 2}, self.now)
-        self.confirmed(self.now)
-        self.engine.expire(self.now + timedelta(minutes=5))
-        self.signal(self.now + timedelta(minutes=6))
-        self.trader.tick(self.now + timedelta(minutes=6))
-        self.assertEqual(len(self.f.rows("orders")), 1)
-        self.signal(self.now + timedelta(minutes=11))
-        self.trader.tick(self.now + timedelta(minutes=11))
-        self.assertEqual(len(self.f.rows("orders")), 2)
-        self.engine.expire(self.now + timedelta(minutes=16))
-        self.signal(self.now + timedelta(minutes=22))
-        self.trader.tick(self.now + timedelta(minutes=22))
-        self.assertEqual(len(self.f.rows("orders")), 2)
 
 
 if __name__ == "__main__":

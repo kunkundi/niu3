@@ -116,7 +116,7 @@ test('an expired session asks for verification before retrying a rejected change
     Response.json({ detail: '请先验证管理密码后再进行变更操作' }, { status: 401 }),
   )
   t.after(cancelAuthentication)
-  const pending = api('/config', { method: 'PATCH', body: JSON.stringify({ stop_loss: '.04' }) })
+  const pending = api('/config', { method: 'PATCH', body: JSON.stringify({ max_weight: '.04' }) })
   await new Promise(setImmediate)
   assert.equal(state.authenticated, false)
   assert.equal(state.authRequested, true)

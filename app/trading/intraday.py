@@ -22,7 +22,7 @@ def live_problem(plan, config_id, config, calendar, now):
         return "盘后参考等待开盘后的实时信号确认"
     if not plan or plan.get("config_id") != config_id or plan.get("focus_policy") != FOCUS_POLICY:
         return "等待当前参数的盘中目标"
-    if config.strategy_model == "price_action" and plan.get("strategy") != STRATEGY:
+    if plan.get("strategy") != STRATEGY:
         return "等待裸 K 策略目标"
     if not plan.get("created_at") or not plan.get("id"):
         return "盘中目标尚未生成"
@@ -38,8 +38,8 @@ def live_problem(plan, config_id, config, calendar, now):
     missing = plan.get("missing_quotes", -1)
     # Price-action conditions are local to each instrument. A missing peer quote
     # cannot disable protection of a holding whose own structure and quote are valid.
-    if missing < 0 or (missing and config.strategy_model != "price_action"):
-        return "候选行情未齐，等待完整排名"
+    if missing < 0:
+        return "候选行情状态待确认"
     return ""
 
 
@@ -48,7 +48,7 @@ def exit_evaluable(row):
     return bool(
         row
         and row.get("evaluated_quote_at")
-        and (row.get("score") is not None or row.get("pa", {}).get("ready"))
+        and row.get("pa", {}).get("ready")
         and row.get("focus_status") != "pending"
     )
 
@@ -99,8 +99,8 @@ def confirm_price_action(plan, previous, config_id, config, now):
 
 def order_problem(conn, order, instrument, quote, config, calendar, now):
     config_id, _ = settings(conn)
-    if config.execution_mode != "intraday" or order["config_id"] != config_id:
-        return "盘中执行方式或参数已变更"
+    if order["config_id"] != config_id:
+        return "盘中参数已变更"
     if (
         dt(order["created_at"]).date() != now.date()
         or (now - dt(order["created_at"])).total_seconds() >= config.intraday_order_ttl
@@ -113,8 +113,7 @@ def order_problem(conn, order, instrument, quote, config, calendar, now):
     if not get_state(conn, "buy_ready", False):
         return "数据未就绪，盘中订单等待"
     confirmation = get_state(conn, "intraday_confirmation", {})
-    if config.strategy_model == "price_action":
-        confirmation = confirmation.get("symbols", {}).get(instrument.symbol, {})
+    confirmation = confirmation.get("symbols", {}).get(instrument.symbol, {})
     if (
         confirmation.get("signal_id") != plan["id"]
         or confirmation.get("count", 0) < config.intraday_confirmations
@@ -123,48 +122,37 @@ def order_problem(conn, order, instrument, quote, config, calendar, now):
     row = next((r for r in plan["rows"] if r["symbol"] == instrument.symbol), None)
     if instrument.symbol not in plan["targets"] and not exit_evaluable(row):
         return "持仓筛选数据待齐，暂不退出"
-    if config.strategy_model == "price_action":
-        from dataclasses import replace
-        from app.strategies.price_action import trigger_problem
-        from app.trading.engine import fill_price
+    from dataclasses import replace
+    from app.strategies.price_action import trigger_problem
+    from app.trading.engine import fill_price
 
-        evidence = conn.execute(
-            "SELECT payload FROM intraday_decisions WHERE order_id=?", (order["id"],)
-        ).fetchone()
-        decision = json.loads(evidence[0]) if evidence else {}
-        frozen = decision.get("pa", {})
-        pa = (row or {}).get("pa", {})
-        if (frozen.get("input_sha256") != pa.get("input_sha256")
-                or frozen.get("execution_sha256") != pa.get("execution_sha256")):
-            return "裸 K 结构已更新，等待新决策"
-        if side_problem := reentry_problem(conn, frozen, instrument, quote, config, now):
-            return side_problem
-        executable = replace(
-            quote,
-            ask=fill_price(quote, "BUY", instrument.tick),
-            bid=fill_price(quote, "SELL", instrument.tick),
-        )
-        problem = (
-            execution_problem(conn, decision.get("minute_t"), instrument, quote, config, now, order["kind"])
-            if minute_t_enabled(config) and order["kind"] in {"t_sell", "t_buy"}
-            else trigger_problem(pa, executable, config, order["kind"], order["side"])
-        )
-        if problem:
-            return problem
+    evidence = conn.execute(
+        "SELECT payload FROM intraday_decisions WHERE order_id=?", (order["id"],)
+    ).fetchone()
+    decision = json.loads(evidence[0]) if evidence else {}
+    frozen = decision.get("pa", {})
+    pa = (row or {}).get("pa", {})
+    if (frozen.get("input_sha256") != pa.get("input_sha256")
+            or frozen.get("execution_sha256") != pa.get("execution_sha256")):
+        return "裸 K 结构已更新，等待新决策"
+    if side_problem := reentry_problem(conn, frozen, instrument, quote, config, now):
+        return side_problem
+    executable = replace(
+        quote,
+        ask=fill_price(quote, "BUY", instrument.tick),
+        bid=fill_price(quote, "SELL", instrument.tick),
+    )
+    problem = (
+        execution_problem(conn, decision.get("minute_t"), instrument, quote, config, now, order["kind"])
+        if minute_t_enabled(config) and order["kind"] in {"t_sell", "t_buy"}
+        else trigger_problem(pa, executable, config, order["kind"], order["side"])
+    )
+    if problem:
+        return problem
     if order["kind"] in {"t_sell", "t_buy"}:
         if not config.intraday_t_enabled or instrument.symbol not in plan["targets"]:
             return "做 T 条件已失效"
-        if order["kind"] == "t_sell":
-            evidence = conn.execute(
-                "SELECT payload FROM intraday_decisions WHERE order_id=?", (order["id"],)
-            ).fetchone()
-            if config.strategy_model != "price_action" and (
-                not evidence
-                or quote.bid
-                < dec(json.loads(evidence[0])["t_anchor_price"]) * (1 + config.intraday_t_trigger)
-            ):
-                return "价格已回落，等待做 T 卖出门槛"
-        else:
+        if order["kind"] == "t_buy":
             cycle = conn.execute("SELECT * FROM t_cycles WHERE buy_order_id=?", (order["id"],)).fetchone()
             if not cycle or cycle["status"] != "buying":
                 return "做 T 买回轮次已结束"
@@ -172,11 +160,8 @@ def order_problem(conn, order, instrument, quote, config, calendar, now):
                 "SELECT SUM(quantity) quantity,SUM(gross) gross,SUM(fee) fee FROM fills WHERE order_id=?",
                 (cycle["sell_order_id"],),
             ).fetchone()
-            if not sale["quantity"] or (
-                config.strategy_model != "price_action"
-                and quote.ask > Decimal(sale["gross"]) / sale["quantity"] * (1 - config.intraday_t_trigger)
-            ):
-                return "价格已反弹，等待做 T 买回门槛"
+            if not sale["quantity"]:
+                return "本轮尚无实际卖出成交"
             from app.trading.engine import fee_for, fill_price
 
             cost = order["quantity"] * fill_price(quote, "BUY", instrument.tick)
@@ -202,7 +187,7 @@ class IntradayTrader:
     ):
         key = f"{kind}:{plan['id']}:{instrument.symbol}:{side}"
         pa = next((r.get("pa", {}) for r in plan["rows"] if r["symbol"] == instrument.symbol), {})
-        if config.strategy_model == "price_action" and kind == "intraday":
+        if kind == "intraday":
             # One intent per completed setup/day; refreshed quotes cannot pyramid the same setup.
             key = f"{kind}:pa:{config_id}:{now.date()}:{pa.get('signal_day') if side == 'BUY' else pa.get('exit_day')}:{instrument.symbol}:{side}"
             if side == "BUY" and pa.get("reentry"):
@@ -232,12 +217,6 @@ class IntradayTrader:
                         "reason": reason,
                         "pa": pa,
                         "minute_t": minute_t,
-                        "t_anchor_price": get_state(conn, f"t_anchor:{instrument.symbol}", {}).get(
-                            "price", quote.previous_close
-                        )
-                        if get_state(conn, f"t_anchor:{instrument.symbol}", {}).get("day")
-                        == now.date().isoformat()
-                        else quote.previous_close,
                     }
                 ),
             ),
@@ -292,13 +271,11 @@ class IntradayTrader:
             return "做 T 买回单等待成交"
         elif bought >= sell["filled"]:
             status = "complete"
-            set_state(conn, f"t_anchor:{instrument.symbol}", {"day": cycle["day"], "price": quote.last})
         else:
             status = "waiting_buy"
             totals = conn.execute(
                 "SELECT SUM(gross) gross,SUM(fee) fee FROM fills WHERE order_id=?", (sell["id"],)
             ).fetchone()
-            sale_price = Decimal(totals["gross"]) / sell["filled"]
             quantity = (
                 min(sell["filled"] - bought, max(0, desired - current))
                 // instrument.lot_size
@@ -309,7 +286,7 @@ class IntradayTrader:
                 if minute_t_enabled(config) else None
             )
             trigger = minute_t["ready"] if minute_t else self._t_trigger(
-                plan, instrument.symbol, quote, config, "t_buy", sale_price
+                plan, instrument.symbol, quote, config, "t_buy"
             )
             limit = self._limit(conn, instrument.symbol, config, now)
             if minute_t:
@@ -335,9 +312,7 @@ class IntradayTrader:
                         quantity,
                         "t_buy",
                         "5 分钟做 T：冻结支撑附近企稳，买回实际已卖份额"
-                        if minute_t else "裸 K 做 T：回到支撑且未跌破失效位，买回已卖份额"
-                        if config.strategy_model == "price_action"
-                        else "底仓做 T：价格回落，买回已卖份额",
+                        if minute_t else "裸 K 做 T：回到支撑且未跌破失效位，买回已卖份额",
                         now,
                         config_id,
                         config,
@@ -363,23 +338,15 @@ class IntradayTrader:
             "abandoned": "本轮做 T 已结束，后续按实时目标评估",
         }[status]
 
-    def _t_trigger(self, plan, symbol, quote, config, kind, anchor):
-        if config.strategy_model == "price_action":
-            from app.strategies.price_action import trigger_problem
+    def _t_trigger(self, plan, symbol, quote, config, kind):
+        from app.strategies.price_action import trigger_problem
 
-            pa = next((r.get("pa") for r in plan["rows"] if r["symbol"] == symbol), None)
-            return not trigger_problem(pa, quote, config, kind, "SELL" if kind == "t_sell" else "BUY")
-        return (
-            anchor > 0 and quote.bid >= Decimal(anchor) * (1 + config.intraday_t_trigger)
-            if kind == "t_sell"
-            else quote.ask <= anchor * (1 - config.intraday_t_trigger)
-        )
+        pa = next((r.get("pa") for r in plan["rows"] if r["symbol"] == symbol), None)
+        return not trigger_problem(pa, quote, config, kind, "SELL" if kind == "t_sell" else "BUY")
 
     def tick(self, now):
         with self.db.transaction() as conn:
             config_id, config = settings(conn)
-            if config.execution_mode != "intraday":
-                return
             plan = get_state(conn, "live_targets", {})
             reason = (
                 "非交易时段，等待自动执行"
@@ -405,37 +372,15 @@ class IntradayTrader:
                     {"at": iso(now), "state": "waiting", "message": "持仓估值未就绪，更新后自动继续", "items": []},
                 )
                 return
-            fingerprint = hashlib.sha256(
-                dump(
-                    {
-                        "config": config_id,
-                        "day": now.date().isoformat(),
-                        "targets": plan["targets"],
-                        "structures": [
-                            (r["symbol"], r.get("pa", {}).get("execution_sha256", r.get("pa", {}).get("input_sha256")), r.get("pa", {}).get("action"))
-                            for r in plan["rows"]
-                            if r.get("pa")
-                        ]
-                        if config.strategy_model == "price_action"
-                        else [],
-                    }
-                ).encode()
-            ).hexdigest()
-            confirmation = get_state(conn, "intraday_confirmation", {})
-            previous_symbols = confirmation.get("symbols", {})
-            if confirmation.get("fingerprint") != fingerprint:
-                confirmation = {"fingerprint": fingerprint, "signal_id": plan["id"], "count": 1}
-            elif confirmation.get("signal_id") != plan["id"]:
-                confirmation["signal_id"] = plan["id"]
-                confirmation["count"] += 1
-            if config.strategy_model == "price_action":
-                confirmation["symbols"] = confirm_price_action(
-                    plan, previous_symbols, config_id, config, now
-                )
-                confirmation["count"] = min(
-                    (v["count"] for s, v in confirmation["symbols"].items() if s in plan["targets"]),
-                    default=0,
-                )
+            previous_symbols = get_state(conn, "intraday_confirmation", {}).get("symbols", {})
+            confirmation = {"signal_id": plan["id"]}
+            confirmation["symbols"] = confirm_price_action(
+                plan, previous_symbols, config_id, config, now
+            )
+            confirmation["count"] = min(
+                (v["count"] for s, v in confirmation["symbols"].items() if s in plan["targets"]),
+                default=0,
+            )
             set_state(conn, "intraday_confirmation", confirmation)
             universe = instruments(conn)
             holdings = {p["symbol"]: p for p in account["positions"]}
@@ -469,12 +414,9 @@ class IntradayTrader:
                 delta = desired - current
                 row = rows.get(symbol)
                 pa = (row or {}).get("pa", {})
-                symbol_confirmation = (
-                    confirmation["symbols"].get(symbol, {"count": 0})
-                    if config.strategy_model == "price_action" else confirmation
-                )
+                symbol_confirmation = confirmation["symbols"].get(symbol, {"count": 0})
                 confirmed = symbol_confirmation["count"] >= config.intraday_confirmations
-                if config.strategy_model == "price_action" and current and symbol not in active_cycles:
+                if current and symbol not in active_cycles:
                     desired = 0 if pa.get("action") == "exit" else current
                     delta = desired - current
                 risk = conn.execute(
@@ -496,14 +438,7 @@ class IntradayTrader:
                     f"SELECT * FROM orders WHERE symbol=? AND kind IN {KINDS} AND status IN {OPEN}", (symbol,)
                 ).fetchall()
                 for order in pending:
-                    intent_changed = (
-                        (pa.get("action") != ("buy" if order["side"] == "BUY" else "exit"))
-                        if config.strategy_model == "price_action"
-                        else (
-                            (order["side"] == "BUY" and delta <= 0)
-                            or (order["side"] == "SELL" and delta >= 0)
-                        )
-                    )
+                    intent_changed = pa.get("action") != ("buy" if order["side"] == "BUY" else "exit")
                     obsolete = (
                         risk
                         or (order["kind"] == "intraday" and intent_changed)
@@ -552,19 +487,11 @@ class IntradayTrader:
                 if limit:
                     items.append({"symbol": symbol, "message": limit})
                     continue
-                # Entries/exits act on confirmed membership; weight-only moves use a deadband.
-                needs_rebalance = delta and (
-                    current == 0
-                    or desired == 0
-                    or Decimal(abs(delta) * quote.last)
-                    >= Decimal(account["nav_units"]) * config.intraday_drift
+                needs_trade = delta and (
+                    (current == 0 and pa.get("action") == "buy")
+                    or (current > 0 and pa.get("action") == "exit")
                 )
-                if config.strategy_model == "price_action":
-                    needs_rebalance = delta and (
-                        (current == 0 and pa.get("action") == "buy")
-                        or (current > 0 and pa.get("action") == "exit")
-                    )
-                if needs_rebalance:
+                if needs_trade:
                     side = "BUY" if delta > 0 else "SELL"
                     quantity = abs(delta) if side == "BUY" else min(abs(delta), available)
                     if not (side == "SELL" and desired == 0 and quantity == current):
@@ -579,13 +506,7 @@ class IntradayTrader:
                             side,
                             quantity,
                             "intraday",
-                            (
-                                "；".join(row["reasons"])
-                                if config.strategy_model == "price_action"
-                                else "实时目标确认：盘中建仓／调仓"
-                                if desired
-                                else "实时目标确认：趋势或排名退出"
-                            ),
+                            "；".join(row["reasons"]),
                             now,
                             config_id,
                             config,
@@ -619,12 +540,6 @@ class IntradayTrader:
                 if cycles >= config.intraday_t_cycles or count + 2 > config.intraday_max_orders:
                     items.append({"symbol": symbol, "message": "达到本日做 T 轮数或订单预算上限"})
                     continue
-                anchor = get_state(conn, f"t_anchor:{symbol}", {})
-                anchor_price = (
-                    anchor.get("price", 0)
-                    if anchor.get("day") == now.date().isoformat()
-                    else quote.previous_close
-                )
                 quantity = (
                     min(available, int(Decimal(current) * config.intraday_t_fraction))
                     // instrument.lot_size
@@ -635,7 +550,7 @@ class IntradayTrader:
                     if minute_t_enabled(config) else None
                 )
                 trigger = minute_t["ready"] if minute_t else self._t_trigger(
-                    plan, symbol, quote, config, "t_sell", anchor_price
+                    plan, symbol, quote, config, "t_sell"
                 )
                 if minute_t and not trigger:
                     items.append({"symbol": symbol, "message": minute_t["message"]})
@@ -658,9 +573,7 @@ class IntradayTrader:
                         quantity,
                         "t_sell",
                         "5 分钟做 T：盘中压力附近转弱，卖出部分可卖底仓"
-                        if minute_t else "裸 K 做 T：触及已确认压力位，卖出部分可卖底仓"
-                        if config.strategy_model == "price_action"
-                        else "底仓做 T：上涨达到门槛，卖出部分可卖份额",
+                        if minute_t else "裸 K 做 T：触及已确认压力位，卖出部分可卖底仓",
                         now,
                         config_id,
                         config,
@@ -682,9 +595,7 @@ class IntradayTrader:
                     "state": "running",
                     "message": "裸 K 自动交易运行中：日线管理底仓，5 分钟 K 确认做 T"
                     if minute_t_enabled(config) and config.intraday_t_enabled
-                    else "裸 K 自动交易运行中：完整日 K 定位，盘中触发买卖与做 T"
-                    if config.strategy_model == "price_action"
-                    else "盘中自动交易运行中，按实时目标与底仓做 T 规则执行",
+                    else "裸 K 自动交易运行中：完整日 K 定位，盘中触发买卖与做 T",
                     "confirmations": min(confirmation["count"], config.intraday_confirmations),
                     "items": items,
                 },

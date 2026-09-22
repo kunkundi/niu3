@@ -29,7 +29,7 @@ from app.storage.db import (
     settings,
     sold_today,
 )
-from app.strategies.momentum import build_plan
+from app.strategies.price_action import STRATEGY, build_plan
 from app.strategies.focus import FOCUS_RULES, LIQUIDITY_RULES
 from app.storage.maintenance import retain_evidence
 from app.trading.account import reconcile
@@ -320,7 +320,7 @@ class Worker:
                 if result["as_of"] == history_target(self.calendar, now):
                     save_review(conn, result, self.calendar)
             elif key == "live_targets":
-                if result["config_id"] == settings(conn)[0] and result["as_of"] == history_target(
+                if result.get("strategy") == STRATEGY and result["config_id"] == settings(conn)[0] and result["as_of"] == history_target(
                     self.calendar, now
                 ):
                     set_state(conn, key, result)
@@ -444,13 +444,10 @@ class Worker:
                     "SELECT DISTINCT symbol FROM orders WHERE status IN ('pending','partial')"
                 )
             }
-            plan_row = conn.execute("SELECT payload FROM plans ORDER BY id DESC LIMIT 1").fetchone()
-            selected = set(json.loads(plan_row[0])["targets"]) if plan_row else set()
-            if config.execution_mode == "intraday":
-                selected = set(get_state(conn, "live_targets", {}).get("targets", {}))
+            selected = set(get_state(conn, "live_targets", {}).get("targets", {}))
             priority = held | pending | selected
             from app.market_data.minute_bars import fetch_five_minute
-            if config.strategy_model == "price_action" and self.calendar.session(now):
+            if self.calendar.session(now):
                 # Minute data also confirms profit exits and post-profit re-entry,
                 # independently of whether inventory T trading is enabled.
                 minute_symbols = held | pending | sold_today(conn, now)
@@ -667,10 +664,7 @@ class Worker:
                 if row["symbol"] in universe:
                     histories.setdefault(row["symbol"], []).append(Bar(**json.loads(row["payload"])))
             held = {r[0] for r in conn.execute("SELECT DISTINCT symbol FROM lots WHERE quantity>0")}
-            builder = build_plan
-            if config.strategy_model == "price_action":
-                from app.strategies.price_action import build_plan as builder
-            plan = builder(list(universe.values()), histories, held, as_of, execute, config)
+            plan = build_plan(list(universe.values()), histories, held, as_of, execute, config)
             evidence = dump(
                 {
                     "instruments": [i.to_dict() for i in universe.values()],
@@ -756,12 +750,6 @@ class Worker:
             apply_actions(conn, now)
         self.engine.expire(now)
         self.engine.risk_check(now)
-        with self.db.connect() as conn:
-            plan = conn.execute(
-                "SELECT id FROM plans WHERE execute_day=? ORDER BY id DESC LIMIT 1", (now.date().isoformat(),)
-            ).fetchone()
-        if plan:
-            self.engine.rebalance(plan["id"], now)
         if time.monotonic() - self.last_intraday >= 5 or not network:
             self.intraday.tick(now)
             self.last_intraday = time.monotonic()

@@ -7,13 +7,14 @@ from datetime import timedelta
 from unittest.mock import Mock
 
 from app.automation.service import Worker
+from app.automation.targets import calculate_targets
 from app.core.calendar import Calendar
 from app.core.config import data_dir
 from app.core.types import iso, units
 from app.storage.db import Database, put_instrument, put_quote, set_state
 from app.trading.account import reconcile, snapshot
 from app.trading.engine import Engine
-from tests.helpers import Fixture, at, bars
+from tests.helpers import Fixture, at, candles
 
 
 def main():
@@ -30,7 +31,7 @@ def main():
         start = at()
         end = at("2026-09-08T09:35:30")
 
-        def quote(when, volume, price="1.000"):
+        def quote(when, volume, price="1.007"):
             value = fixture.quote(when, volume=volume, price=price)
             with db.transaction() as conn:
                 put_quote(conn, value)
@@ -46,24 +47,28 @@ def main():
                 set_state(conn, "actions:sh510300", {"at": iso(start)})
             worker = Worker(db, Calendar(), Mock())
             try:
-                worker.ingest("history:sh510300", {"qfq": bars(), "raw": bars()}, start)
+                worker.ingest("history:sh510300", {"qfq": candles(), "raw": candles()}, start)
                 quote(start - timedelta(seconds=10), 1_000_000)
-                worker.tick(start, network=False)
-                quote(start + timedelta(seconds=30), 4_000_000)
-                worker.tick(start + timedelta(seconds=30), network=False)
+                for seconds in (0, 60):
+                    observed = start + timedelta(seconds=seconds)
+                    quote(observed, 1_000_000)
+                    worker.ingest("live_targets", calculate_targets(db, "2026-09-04", observed), observed)
+                    worker.tick(observed, network=False)
+                quote(start + timedelta(seconds=90), 4_000_000)
+                worker.tick(start + timedelta(seconds=90), network=False)
             finally:
                 worker.close()
         elif stage == "hold":
-            engine.match(start + timedelta(seconds=40))
+            engine.match(start + timedelta(seconds=100))
             with db.connect() as conn:
                 assert conn.execute("SELECT COUNT(*) FROM fills").fetchone()[0] == 1
-                account = snapshot(conn, start + timedelta(seconds=40))
+                account = snapshot(conn, start + timedelta(seconds=100))
                 assert account["positions"][0]["available"] == 0
                 assert not reconcile(conn)
         elif stage == "exit":
             with db.transaction() as conn:
                 set_state(conn, "actions:sh510300", {"at": iso(end)})
-            quote(end - timedelta(seconds=40), 1_000_000, ".940")
+            quote(end - timedelta(seconds=100), 1_000_000, ".940")
             engine.risk_check(end - timedelta(seconds=30))
             quote(end, 4_000_000, ".940")
             engine.match(end)

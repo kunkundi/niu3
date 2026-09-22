@@ -11,7 +11,7 @@ POLICY = "minute-t-v1"
 
 
 def enabled(config):
-    return config.strategy_model == "price_action" and config.intraday_t_model == "minute5"
+    return config.intraday_t_model == "minute5"
 
 
 def context(conn, symbol, now, tick):

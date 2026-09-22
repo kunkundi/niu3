@@ -6,7 +6,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 
 from app.core.calendar import Calendar
 from app.core.config import Settings
-from app.core.types import Quote, dec, dt, iso, units
+from app.core.types import Quote, dt, iso, units
 from app.storage.db import Database, get_state, instruments, latest_quote, set_state, settings
 from app.trading.account import reconcile, snapshot
 from app.strategies.focus import FOCUS_POLICY
@@ -41,82 +41,6 @@ class Engine:
             "config_id,plan_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (key, symbol, side, quantity, reason, kind, iso(now), iso(now), config_id, plan_id),
         )
-
-    def rebalance(self, plan_id: int, now: datetime):
-        if not self.calendar.session(now) or not time(9, 35) <= now.time() < time(10):
-            return
-        with self.db.transaction() as conn:
-            row = conn.execute("SELECT * FROM plans WHERE id=?", (plan_id,)).fetchone()
-            if not row or row["execute_day"] != now.date().isoformat():
-                return
-            config_id, config = settings(conn)
-            if config.execution_mode != "daily":
-                return
-            if config_id != row["config_id"]:
-                return
-            key = f"rebalance:{row['execute_day']}"
-            slot = conn.execute("SELECT status FROM slots WHERE key=?", (key,)).fetchone()
-            if slot and slot["status"] == "done":
-                return
-            plan = json.loads(row["payload"])
-            if plan.get("focus_policy") != FOCUS_POLICY:
-                return
-            account = snapshot(conn, now)
-            if reconcile(conn):
-                return
-            universe = instruments(conn)
-            holdings = {p["symbol"]: p for p in account["positions"]}
-            symbols = sorted(set(holdings) | set(plan["targets"]))
-            # Wait for fresh opening marks before freezing quantities; never price from yesterday's bars.
-            if any(
-                not latest_quote(conn, s) or not latest_quote(conn, s)[1].fresh(now, config.quote_max_age)
-                for s in symbols
-            ):
-                return
-            waiting = False
-            for symbol in symbols:
-                # A retry must not resize an already submitted intent after prices or fills change.
-                if conn.execute(
-                    "SELECT 1 FROM orders WHERE key IN (?,?)",
-                    (f"{key}:{symbol}:BUY", f"{key}:{symbol}:SELL"),
-                ).fetchone():
-                    continue
-                if conn.execute("SELECT 1 FROM risk_intents WHERE symbol=?", (symbol,)).fetchone():
-                    continue
-                target = dec(plan["targets"].get(symbol, 0))
-                instrument = universe.get(symbol)
-                if not instrument:
-                    continue
-                quote = latest_quote(conn, symbol)[1]
-                current = holdings.get(symbol, {}).get("quantity", 0)
-                desired = (
-                    int(Decimal(account["nav_units"]) * target / quote.last / instrument.lot_size)
-                    * instrument.lot_size
-                )
-                delta = desired - current
-                if delta == 0:
-                    continue
-                side = "BUY" if delta > 0 else "SELL"
-                if side == "BUY" and not get_state(conn, "buy_ready", False):
-                    waiting = True
-                    continue
-                self._order(
-                    conn,
-                    f"{key}:{symbol}:{side}",
-                    symbol,
-                    side,
-                    abs(delta),
-                    "日频趋势动量调仓" if desired else "趋势失效或排名退出",
-                    "rebalance",
-                    now,
-                    config_id,
-                    plan_id,
-                )
-            conn.execute(
-                "INSERT INTO slots VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET "
-                "at=excluded.at,status=excluded.status",
-                (key, iso(now), "waiting" if waiting else "done"),
-            )
 
     def risk_check(self, now: datetime):
         if not self.calendar.session(now):
@@ -159,35 +83,28 @@ class Engine:
                 conn.execute("UPDATE lots SET high=? WHERE symbol=? AND quantity>0", (high, symbol))
                 reason = ""
                 profit_exit = None
-                if config.strategy_model == "price_action":
-                    from app.trading.intraday import live_problem
+                from app.trading.intraday import live_problem
 
-                    plan = get_state(conn, "live_targets", {})
-                    reference = get_state(conn, f"pa_position:{symbol}", {})
-                    pa = {}
-                    if not live_problem(plan, config_id, config, self.calendar, now):
-                        pa = next((r.get("pa", {}) for r in plan["rows"] if r["symbol"] == symbol), {})
-                        stop = pa.get("raw", {}).get("structural_stop", 0)
-                        if pa.get("ready") and stop > reference.get("stop", 0):
-                            reference.update(stop=stop, as_of=plan["as_of"], structure=pa)
-                            set_state(conn, f"pa_position:{symbol}", reference)
-                    if reference.get("stop") and price <= reference["stop"]:
-                        reason = "裸 K 结构失效：跌破入场／已确认摆动低点"
-                    elif pa.get("raw", {}).get("exit") and price <= pa["raw"]["exit"]:
-                        reason = f"裸 K 反转退出：跌破{pa.get('exit_setup', '反向形态')}低点"
-                    elif (position["available"] and symbol in universe
-                          and (not reference.get("profit_sold")
-                               or reference.get("profit_sold", 0) < reference["profit_budget"])):
-                        profit_exit = profit_signal(conn, symbol, reference, latest[1],
-                                                    universe[symbol].tick, config, now)
-                        if profit_exit:
-                            reason = PROFIT_REASON
-                elif Decimal(price * position["quantity"]) <= Decimal(position["risk_cost_units"]) * (
-                    1 - config.stop_loss
-                ):
-                    reason = "成本止损"
-                elif Decimal(price) <= Decimal(high) * (1 - config.trailing_stop):
-                    reason = "持仓高点回撤止损"
+                plan = get_state(conn, "live_targets", {})
+                reference = get_state(conn, f"pa_position:{symbol}", {})
+                pa = {}
+                if not live_problem(plan, config_id, config, self.calendar, now):
+                    pa = next((r.get("pa", {}) for r in plan["rows"] if r["symbol"] == symbol), {})
+                    stop = pa.get("raw", {}).get("structural_stop", 0)
+                    if pa.get("ready") and stop > reference.get("stop", 0):
+                        reference.update(stop=stop, as_of=plan["as_of"], structure=pa)
+                        set_state(conn, f"pa_position:{symbol}", reference)
+                if reference.get("stop") and price <= reference["stop"]:
+                    reason = "裸 K 结构失效：跌破入场／已确认摆动低点"
+                elif pa.get("raw", {}).get("exit") and price <= pa["raw"]["exit"]:
+                    reason = f"裸 K 反转退出：跌破{pa.get('exit_setup', '反向形态')}低点"
+                elif (position["available"] and symbol in universe
+                      and (not reference.get("profit_sold")
+                           or reference.get("profit_sold", 0) < reference["profit_budget"])):
+                    profit_exit = profit_signal(conn, symbol, reference, latest[1],
+                                                universe[symbol].tick, config, now)
+                    if profit_exit:
+                        reason = PROFIT_REASON
                 if reason:
                     if reason not in PROFIT_REASONS:
                         conn.execute(
@@ -255,28 +172,27 @@ class Engine:
                         now,
                         config_id,
                     )
-                    if config.strategy_model == "price_action":
-                        from app.storage.db import dump
+                    from app.storage.db import dump
 
-                        order_id = conn.execute("SELECT id FROM orders WHERE key=?", (key,)).fetchone()[0]
-                        conn.execute(
-                            "INSERT OR IGNORE INTO intraday_decisions VALUES(?,?,?,?)",
-                            (
-                                order_id,
-                                iso(now),
-                                config_id,
-                                dump(
-                                    {
-                                        "pa": pa or reference.get("structure", {}),
-                                        "position_reference": reference,
-                                        "profit_exit": profit_exit,
-                                        "quote": latest[1].to_dict(),
-                                        "config": config.model_dump(mode="json"),
-                                        "reason": intent["reason"],
-                                    }
-                                ),
+                    order_id = conn.execute("SELECT id FROM orders WHERE key=?", (key,)).fetchone()[0]
+                    conn.execute(
+                        "INSERT OR IGNORE INTO intraday_decisions VALUES(?,?,?,?)",
+                        (
+                            order_id,
+                            iso(now),
+                            config_id,
+                            dump(
+                                {
+                                    "pa": pa or reference.get("structure", {}),
+                                    "position_reference": reference,
+                                    "profit_exit": profit_exit,
+                                    "quote": latest[1].to_dict(),
+                                    "config": config.model_dump(mode="json"),
+                                    "reason": intent["reason"],
+                                }
                             ),
-                        )
+                        ),
+                    )
 
     def match(self, now: datetime):
         if not self.calendar.session(now):
@@ -303,7 +219,14 @@ class Engine:
                 config_row = conn.execute(
                     "SELECT payload FROM configs WHERE id=?", (order["config_id"],)
                 ).fetchone()
-                config = Settings.model_validate_json(config_row[0])
+                frozen_config = json.loads(config_row[0])
+                if frozen_config.get("strategy_model") != "price_action" or frozen_config.get("execution_mode") != "intraday":
+                    conn.execute(
+                        "UPDATE orders SET status='cancelled',blocked_reason='旧策略订单已停用',updated_at=? WHERE id=?",
+                        (iso(now), order["id"]),
+                    )
+                    continue
+                config = Settings.from_record(frozen_config)
                 blocked = self._blocker(conn, order, instrument, quote, now, current_config)
                 price = fill_price(quote, order["side"], instrument.tick)
                 if not blocked and (price <= 0 or price > quote.upper or price < quote.lower):

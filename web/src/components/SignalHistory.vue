@@ -136,7 +136,7 @@ watch(filter, () => {
         <strong>{{ detail.as_of }} · 收盘快照</strong>
         <span>入选 {{ Object.keys(detail.targets || {}).length }} 只 · 目标仓位 {{ pct(exposure) }}</span>
         <span
-          >{{ isPa ? '裸 K 价格行为' : '趋势动量轮动' }} · {{ detail.strategy || '—' }} · 参数 v{{
+          >{{ isPa ? '裸 K 价格行为' : '历史策略（已停用）' }} · {{ detail.strategy || '—' }} · 参数 v{{
             detail.config_id
           }}</span
         >
@@ -171,7 +171,7 @@ watch(filter, () => {
               <th>ETF</th>
               <th>当时状态</th>
               <th class="number-cell">目标仓位</th>
-              <th class="number-cell">{{ isPa ? '入场 / 失效' : '动量评分' }}</th>
+              <th class="number-cell">入场 / 失效</th>
               <th v-if="isPa" class="number-cell">支撑 / 压力</th>
               <th>当时的筛选依据</th>
             </tr>
@@ -187,9 +187,7 @@ watch(filter, () => {
               <td class="number-cell" v-if="isPa">
                 {{ money(row.pa?.entry, 3) }}<small>{{ money(row.pa?.entry_stop, 3) }}</small>
               </td>
-              <td class="number-cell" v-else>
-                {{ row.score == null ? '—' : money(Number(row.score) * 100) }}
-              </td>
+              <td class="number-cell" v-else>—</td>
               <td class="number-cell" v-if="isPa">
                 {{ money(row.pa?.support, 3) }}<small>{{ money(row.pa?.resistance, 3) }}</small>
               </td>

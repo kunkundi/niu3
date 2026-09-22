@@ -30,8 +30,6 @@ def profit_quantity(reference, quantity, available, lot_size, preserve_core=True
 
 def cooling_symbols(conn, day, config):
     symbols = {r[0] for r in conn.execute("SELECT symbol FROM cooldown WHERE day=?", (day,))}
-    if config.strategy_model != "price_action":
-        return symbols
     # Preserve historical rows. Ignore only a cooldown positively attributable
     # solely to profit orders; unknown causes and actual stops remain blocked.
     for symbol in list(symbols):
@@ -79,7 +77,6 @@ def profit_order_problem(conn, order, instrument, quote, config, now):
     frozen = evidence.get("profit_exit", {})
     version = conn.execute("SELECT MAX(id) FROM configs").fetchone()[0]
     if (not frozen or frozen.get("policy") != POLICY or order["config_id"] != version
-            or config.strategy_model != "price_action"
             or dt(order["created_at"]).date() != now.date()
             or (now - dt(order["created_at"])).total_seconds() >= config.intraday_order_ttl):
         return "止盈条件已过期，等待重新确认"

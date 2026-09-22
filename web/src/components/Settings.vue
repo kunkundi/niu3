@@ -33,33 +33,25 @@ const active = computed(() => tabs.find((tab) => tab.hash === route.hash) || tab
 const percentFields = new Set([
   'max_weight',
   'max_exposure',
-  'stop_loss',
-  'trailing_stop',
   'commission_rate',
   'participation',
   'coverage_required',
-  'intraday_drift',
-  'intraday_t_trigger',
   'intraday_t_fraction',
 ])
 const groups = [
   {
     title: '盘中自动执行',
     description:
-      '日线管理底仓；裸 K 策略可用 5 分钟 K 确认压力转弱卖出、支撑企稳买回。新买份额按各 ETF 的 T+0／T+1 交易属性计算可卖日。',
+      '裸 K 价格行为 · 盘中自动交易。日线管理底仓，可用 5 分钟 K 确认压力转弱卖出、支撑企稳买回。新买份额按各 ETF 的 T+0／T+1 交易属性计算可卖日。',
     keys: [
-      'strategy_model',
-      'execution_mode',
       'pa_rr_enabled',
       'pa_min_rr',
       'intraday_confirmations',
       'intraday_min_interval',
-      'intraday_drift',
       'intraday_max_orders',
       'intraday_order_ttl',
       'intraday_t_enabled',
       'intraday_t_model',
-      'intraday_t_trigger',
       'intraday_t_fraction',
       'intraday_t_cycles',
     ],
@@ -71,8 +63,8 @@ const groups = [
   },
   {
     title: '信号与保护',
-    description: '设置历史数据门槛与退出条件。组合回撤仅作统计，不触发保护或拦截交易。',
-    keys: ['minimum_bars', 'retain_rank', 'stop_loss', 'trailing_stop'],
+    description: '设置历史数据门槛。裸 K 按结构失效退出，组合回撤仅作统计。',
+    keys: ['minimum_bars'],
   },
   {
     title: '成交费用与撮合',
@@ -93,20 +85,7 @@ const sectionKeys = {
 }
 const saveLabels = { strategy: '保存策略', runtime: '保存调度' }
 const parameterGroups = computed(() =>
-  (active.value.key === 'runtime' ? [groups.at(-1)] : groups.slice(0, -1)).map((group) => ({
-    ...group,
-    keys: group.keys.filter((key) =>
-      form.value.strategy_model === 'price_action'
-        ? !['retain_rank', 'stop_loss', 'trailing_stop', 'intraday_drift', 'intraday_t_trigger'].includes(key)
-        : !['pa_rr_enabled', 'pa_min_rr', 'intraday_t_model'].includes(key),
-    ),
-  })),
-)
-watch(
-  () => form.value.strategy_model,
-  (model) => {
-    if (model === 'price_action') form.value.execution_mode = 'intraday'
-  },
+  active.value.key === 'runtime' ? [groups.at(-1)] : groups.slice(0, -1),
 )
 const runPages = computed(() => Math.max(1, Math.ceil(runs.value.items.length / 10)))
 const visibleRuns = computed(() => runs.value.items.slice((runPage.value - 1) * 10, runPage.value * 10))
@@ -307,17 +286,9 @@ function showInvalid(event) {
             <div class="settings-fields">
               <label v-for="key in group.keys" :key="key"
                 ><span>{{ config.labels[key] }}{{ percentFields.has(key) ? '（%）' : '' }}</span>
-                <select v-if="key === 'execution_mode'" v-model="form[key]">
-                  <option value="intraday">盘中自动交易</option>
-                  <option value="daily" :disabled="form.strategy_model === 'price_action'">日频调仓</option>
-                </select>
-                <select v-else-if="key === 'strategy_model'" v-model="form[key]">
-                  <option value="price_action">裸 K 价格行为 · 日 K 结构 / 盘中触发</option>
-                  <option value="momentum">趋势动量轮动</option>
-                </select>
-                <select v-else-if="key === 'intraday_t_enabled'" v-model="form[key]">
+                <select v-if="key === 'intraday_t_enabled'" v-model="form[key]">
                   <option :value="true">启用：底仓卖出后回落买回</option>
-                  <option :value="false">关闭做 T，保留盘中调仓</option>
+                  <option :value="false">关闭做 T，保留裸 K 买卖</option>
                 </select>
                 <select
                   v-else-if="key === 'intraday_t_model'"

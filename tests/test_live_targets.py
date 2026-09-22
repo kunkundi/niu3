@@ -10,7 +10,7 @@ from app.automation.targets import calculate_targets
 from app.core.types import iso
 from app.dashboard.api import create_app
 from app.storage.db import get_state, set_state
-from tests.helpers import Fixture, at, bars
+from tests.helpers import Fixture, at, bars, candles
 
 
 class LiveTargetsTests(unittest.TestCase):
@@ -18,9 +18,9 @@ class LiveTargetsTests(unittest.TestCase):
         self.f = Fixture()
         self.worker = Worker(self.f.db, self.f.calendar, Mock())
         self.now = at()
-        history = bars()
+        history = candles()
         self.worker.ingest("history:sh510300", {"raw": history, "qfq": history}, self.now)
-        self.f.quote(self.now, price="1.020")
+        self.f.quote(self.now, price="1.007")
         with self.f.db.transaction() as conn:
             set_state(conn, "profile:sh510300", {"at": iso(self.now)})
             set_state(conn, "catalog", {"at": iso(self.now), "total": 1})
@@ -40,8 +40,8 @@ class LiveTargetsTests(unittest.TestCase):
         self.f.quote(later, price="0.940")
         second = calculate_targets(self.f.db, "2026-09-04", later)
         self.assertEqual(second["targets"], {})
-        self.assertIn("趋势门槛未通过", second["rows"][0]["reasons"])
-        self.assertNotEqual(first["rows"][0]["score"], second["rows"][0]["score"])
+        self.assertEqual(second["rows"][0]["pa"]["action"], "exit")
+        self.assertNotEqual(first["rows"][0]["pa"]["action"], second["rows"][0]["pa"]["action"])
         self.assertEqual(first["rows"][0]["amount20"], second["rows"][0]["amount20"])
         self.assertEqual(self.f.rows("plans"), plans)
         self.assertEqual(self.f.rows("bars"), stored_bars)
@@ -66,14 +66,13 @@ class LiveTargetsTests(unittest.TestCase):
         self.f.db.change_config({"execution_mode": "intraday"}, self.now)
         for seconds in (60, 120):
             now = self.now + timedelta(seconds=seconds)
-            self.f.quote(now, price="1.020")
+            self.f.quote(now, price="1.007")
             self.worker.ingest("live_targets", calculate_targets(self.f.db, "2026-09-04", now), now)
             self.worker.tick(now, network=False)
         orders = self.f.rows("orders")
-        self.assertEqual([o["kind"] for o in orders], ["rebalance", "intraday"])
-        self.assertEqual(orders[0]["status"], "cancelled")
-        self.assertEqual(orders[1]["status"], "pending")
-        self.f.quote(self.now + timedelta(seconds=150), price="1.020", volume=5_000_000)
+        self.assertEqual([o["kind"] for o in orders], ["intraday"])
+        self.assertEqual(orders[0]["status"], "pending")
+        self.f.quote(self.now + timedelta(seconds=150), price="1.007", volume=5_000_000)
         self.worker.tick(self.now + timedelta(seconds=150), network=False)
         self.assertTrue(self.f.rows("fills"))
 
@@ -106,7 +105,7 @@ class LiveTargetsTests(unittest.TestCase):
             current = client.get(path).json()
             self.assertEqual(current["update_state"], "live")
             self.assertFalse(current["stale"])
-            self.assertEqual(client.get("/api/v1/signals").json()["mode"], "daily")
+            self.assertEqual(client.get("/api/v1/signals").json()["mode"], "live")
             self.now += timedelta(seconds=100)
             self.assertEqual(client.get(path).json()["update_state"], "offline")
             self.worker.lease(self.now)
@@ -127,7 +126,7 @@ class LiveTargetsTests(unittest.TestCase):
     def test_after_close_and_preopen_keep_dated_session_snapshot_without_changing_execution_state(self):
         self.f.db.change_config({"execution_mode": "intraday"}, self.now)
         self.now = at("2026-09-07T14:59:00")
-        self.f.quote(self.now, price="1.020")
+        self.f.quote(self.now, price="1.007")
         plan = calculate_targets(self.f.db, "2026-09-04", self.now)
         self.worker.ingest("live_targets", plan, self.now)
         with patch.dict(os.environ, {"NIUNO3_ADMIN_PASSWORD": "niuno3-test-password-2026"}):
@@ -180,7 +179,7 @@ class LiveTargetsTests(unittest.TestCase):
         self.now = at("2026-09-11T14:59:00")
         history = bars(end="2026-09-10")
         self.worker.ingest("history:sh510300", {"raw": history, "qfq": history}, self.now)
-        self.f.quote(self.now, price="1.020")
+        self.f.quote(self.now, price="1.007")
         plan = calculate_targets(self.f.db, "2026-09-10", self.now)
         self.worker.ingest("live_targets", plan, self.now)
         self.now = at("2026-09-12T10:00:00")

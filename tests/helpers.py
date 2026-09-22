@@ -1,3 +1,5 @@
+import math
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,6 +27,17 @@ def bars(count=140, end="2026-09-04", start=1, growth=0.003, amount="150000000")
         Bar(d, str(Decimal(str(start)) * (1 + Decimal(str(growth))) ** i), amount)
         for i, d in enumerate(reversed(dates))
     ]
+
+
+def candles():
+    history = []
+    for i, b in enumerate(bars()):
+        p = 1 + i * 0.002 + math.sin(i * 0.6) * 0.025
+        history.append(
+            replace(b, open=str(p - 0.004), close=str(p + 0.004), high=str(p + 0.012), low=str(p - 0.012))
+        )
+    history[-1] = replace(history[-1], open="1.3", close="1.305", high="1.31", low="1.24")
+    return history
 
 
 class Fixture:
