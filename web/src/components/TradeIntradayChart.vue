@@ -4,7 +4,7 @@ import { displayCode } from '../display-code.js'
 import { money, pct } from '../state'
 import { tradeIntradayChart } from '../trade-intraday-chart.js'
 import { minuteTLevels, tradeIntradayDays } from '../minute-t-levels.js'
-import TradeMarkers from './TradeMarkers.vue'
+import TradePoints from './TradePoints.vue'
 
 const props = defineProps({
   security: { type: Object, required: true },
@@ -110,7 +110,7 @@ onUnmounted(() => observer?.disconnect())
           :viewBox="`0 0 ${chart.width} ${chart.height}`"
           preserveAspectRatio="none"
           role="img"
-          :aria-label="`${displayCode(security.name)} ${day} 分时线，09:30至15:00，已采集至${chart.last.time}；左侧 Y 轴为价格（元），0% 水平轴对应昨收 ${money(chart.previous, 3)} 元；买卖标记按成交时间贴合分时线，实际成交价见标签与详情`"
+          :aria-label="`${displayCode(security.name)} ${day} 分时线，09:30至15:00，已采集至${chart.last.time}；左侧 Y 轴为价格（元），0% 水平轴对应昨收 ${money(chart.previous, 3)} 元；买卖点按成交时间贴合分时线，悬停查看交易数据，点击查看详情`"
         >
           <path
             class="intraday-card-price-axis"
@@ -152,7 +152,12 @@ onUnmounted(() => observer?.disconnect())
             >{{ line.label }} {{ money(line.value, 3) }}</span
           >
         </div>
-        <TradeMarkers :anchors="chart.anchors" @select="emit('select', $event.event)" />
+        <TradePoints
+          :anchors="chart.anchors"
+          :width="chart.width"
+          :height="chart.height"
+          @select="emit('select', $event.event)"
+        />
       </div>
       <div class="intraday-card-x"><span>09:30</span><span>11:30 / 13:00</span><span>15:00</span></div>
     </div>
@@ -161,9 +166,9 @@ onUnmounted(() => observer?.disconnect())
       }}<button v-if="!loading" @click="emit('retry')">重试</button>
     </div>
     <template v-if="chart">
-      <p class="intraday-card-note">按原始报价绘制；标记按成交时间贴线，实际成交价见标签与详情。</p>
-      <div v-if="chart.unplaced.length" class="intraday-card-unplaced">
-        <p>以下成交时刻暂无连续行情，暂未在曲线上定位：</p>
+      <p class="intraday-card-note">买卖点按成交时间贴线；悬停查看交易数据，点击查看详情。</p>
+      <details v-if="chart.unplaced.length" class="intraday-card-unplaced">
+        <summary>{{ chart.unplaced.length }} 个成交点缺少连续行情 · 查看明细</summary>
         <button
           v-for="marker in chart.unplaced"
           :key="marker.id"
@@ -174,7 +179,7 @@ onUnmounted(() => observer?.disconnect())
           <span>{{ marker.labelDetails.join(' · ') }}</span
           ><small>详情 ↗</small>
         </button>
-      </div>
+      </details>
     </template>
     <p v-if="error && chart" class="intraday-card-warning" role="status">{{ error }}</p>
     <button
@@ -338,10 +343,6 @@ onUnmounted(() => observer?.disconnect())
   width: 100%;
   height: 100%;
 }
-.intraday-card-plot :deep(button.fill) {
-  font-size: 10px;
-  font-weight: 600;
-}
 .intraday-card-levels {
   position: absolute;
   inset: 0;
@@ -380,11 +381,14 @@ onUnmounted(() => observer?.disconnect())
   font-size: 11px;
 }
 .intraday-card-note,
-.intraday-card-unplaced p {
+.intraday-card-unplaced summary {
   margin: 0;
   padding: 4px 10px 8px;
   font-size: 10px;
   color: var(--muted);
+}
+.intraday-card-unplaced summary {
+  cursor: pointer;
 }
 .intraday-card-unplaced button {
   display: flex;

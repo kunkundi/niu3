@@ -1,4 +1,4 @@
-import { intradayTradeGroups, layoutTradeMarkers } from './trade-observation.js'
+import { intradayTradeGroups } from './trade-observation.js'
 import { priceLineLayout } from './signal-chart.js'
 import { intradayLinePoints, intradayLinePrice, intradayLinePath } from './intraday-line.js'
 
@@ -19,7 +19,7 @@ export function tradeIntradayChart(data, events, day, width = 300, levels = [], 
         event,
       })),
     )
-  let height = Math.max(124, minHeight)
+  const height = Math.max(124, minHeight)
   const top = 22,
     inset = 8
   const previous = Number(data.previous_close)
@@ -51,40 +51,17 @@ export function tradeIntradayChart(data, events, day, width = 300, levels = [], 
       linePrice: intradayLinePrice(points, group.timestamp),
       label: `${action} ${group.time}`,
       labelDetails: [execution, quantity, amount],
-      labelWidth: Math.min(
-        width - 4,
-        Math.max(
-          group.label === 'T' ? 132 : 112,
-          execution.length * 6 + 10,
-          quantity.length * 6 + 10,
-          amount.length * 6 + 10,
-        ),
-      ),
-      labelHeight: 54,
-      leaderDash: '3 3',
       title: `${group.event.name} ${day} ${group.time} ${action} ${quantity}，成交金额 ${amount}，${execution}；标记按成交时间贴合分时线，查看成交详情`,
     }
   })
   const located = labels.filter((label) => label.linePrice !== null)
   const unplaced = labels.filter((label) => label.linePrice === null)
-  let anchors
-  // Keep ordinary cards compact; add space only when every full callout cannot fit.
-  // Never silently drop a transaction label because several executions are close together.
-  for (let attempt = 0; attempt <= located.length; attempt++) {
-    anchors = located.map((label) => ({
-      ...label,
-      x: x(label.minute) / width,
-      y: y(label.linePrice) / height,
-      labelTop: label.side === 'BUY' ? height - label.labelHeight - 2 : 2,
-    }))
-    const placed = layoutTradeMarkers(
-      anchors.map((anchor) => ({ ...anchor, x: anchor.x * width, y: anchor.y * height })),
-      width,
-      height,
-    )
-    if (placed.length === anchors.length || attempt === located.length) break
-    height += Math.max(44, ...located.map((label) => label.labelHeight + 4))
-  }
+  // Points stay on the price line; their details appear only on interaction.
+  const anchors = located.map((label) => ({
+    ...label,
+    x: x(label.minute) / width,
+    y: y(label.linePrice) / height,
+  }))
   const plotted = points.map((point) => ({ ...point, x: x(point.minute), y: y(point.price) }))
   return {
     path: intradayLinePath(plotted),

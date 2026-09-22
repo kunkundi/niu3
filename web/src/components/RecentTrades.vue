@@ -100,7 +100,7 @@ onUnmounted(() => {
         <button :aria-pressed="view === 'timeline'" @click="view = 'timeline'">成交时间线</button>
       </div>
       <span v-if="view === 'charts'" class="chart-key"
-        ><b class="buy-text">买入</b><b class="sell-text">卖出</b>虚线为 T 参考价 · 点击成交标记查看明细</span
+        ><b class="buy-text">▲ 买入</b><b class="sell-text">▼ 卖出</b>悬停查看交易数据 · 点击查看详情</span
       >
       <span v-else class="chart-key">最新在前 · 北京时间</span>
     </div>
@@ -227,6 +227,7 @@ onUnmounted(() => {
 <style scoped>
 .recent-trades {
   margin-bottom: 12px;
+  overflow: visible;
 }
 .recent-viewbar {
   display: flex;
