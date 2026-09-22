@@ -265,9 +265,10 @@ onUnmounted(() => {
 .trade-intraday-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
   gap: 12px;
   padding: 0 16px 12px;
-  align-items: start;
+  align-items: stretch;
 }
 @media (max-width: 1099px) {
   .trade-intraday-grid {

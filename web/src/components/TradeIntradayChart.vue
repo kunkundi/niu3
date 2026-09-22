@@ -192,6 +192,8 @@ onUnmounted(() => observer?.disconnect())
 
 <style scoped>
 .trade-intraday-card {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   border: 1px solid var(--line);
   background: var(--panel);
@@ -369,6 +371,7 @@ onUnmounted(() => observer?.disconnect())
   gap: 5px;
   width: 100%;
   min-height: 34px;
+  margin-top: auto;
   padding: 7px 10px;
   border: 0;
   border-top: 1px solid var(--line);
