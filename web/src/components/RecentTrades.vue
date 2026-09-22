@@ -22,8 +22,7 @@ const limit = ref(5),
   selectedId = ref(null),
   detailsOpen = ref(false)
 const events = computed(() => recentTradeEvents(items.value))
-const view = ref('charts'),
-  chartLimit = ref(4)
+const view = ref('charts')
 const minuteT = useMinuteT()
 const displayDay = computed(
   () =>
@@ -107,7 +106,7 @@ onUnmounted(() => {
     </div>
     <div v-if="securities.length && view === 'charts'" class="trade-intraday-grid">
       <TradeIntradayCard
-        v-for="security in securities.slice(0, chartLimit)"
+        v-for="security in securities"
         :key="security.symbol"
         :security="security"
         :minute-t="minuteT"
@@ -173,10 +172,6 @@ onUnmounted(() => {
         >当前持仓及{{ displayDayLabel }}卖出 · 可切换历史成交日 · 标记按北京时间贴合分时线，实际成交价见明细
         <span v-if="total > items.length"> · 仅含最近 {{ items.length }} 笔成交</span>
       </span>
-      <button v-if="securities.length > chartLimit" class="text-button" @click="chartLimit += 4">
-        再看 {{ Math.min(4, securities.length - chartLimit) }} 只 ETF
-      </button>
-      <button v-else-if="chartLimit > 4" class="text-button" @click="chartLimit = 4">收起</button>
     </footer>
     <footer v-if="events.length && view === 'timeline'" class="recent-footer">
       <span
