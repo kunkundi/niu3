@@ -1,5 +1,9 @@
 <img width="1200" alt="NiuNo3 牛牛3号" src="docs/assets/readme/niuno3.svg" />
 
+<p align="left">
+  <a href="https://linux.do"><img src="https://shorturl.at/ggSqS" alt="LINUX DO" /></a>
+</p>
+
 面向沪深上市 ETF 的行情观察、策略研究与自动模拟交易工作台。
 
 通过手动维护 ETF 名单，查看分时与日 K、跟踪策略信号，并在本地模拟账户中记录订单、成交和资产变化。后台独立运行，关闭浏览器后仍会按交易时段采集数据、计算策略和检查模拟订单。
