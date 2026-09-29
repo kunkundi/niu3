@@ -1,5 +1,7 @@
 import os
 import unittest
+import time
+from concurrent.futures import Future
 from datetime import timedelta
 from unittest.mock import Mock, patch
 
@@ -43,6 +45,7 @@ class LiveTargetsTests(unittest.TestCase):
         self.assertEqual(second["rows"][0]["pa"]["action"], "exit")
         self.assertNotEqual(first["rows"][0]["pa"]["action"], second["rows"][0]["pa"]["action"])
         self.assertEqual(first["rows"][0]["amount20"], second["rows"][0]["amount20"])
+        self.assertNotEqual(first["rows"][0]["evaluated_quote_id"], second["rows"][0]["evaluated_quote_id"])
         self.assertEqual(self.f.rows("plans"), plans)
         self.assertEqual(self.f.rows("bars"), stored_bars)
         self.assertEqual(self.f.rows("orders"), orders)
@@ -93,6 +96,76 @@ class LiveTargetsTests(unittest.TestCase):
         self.worker.collect(self.now)
         self.worker.schedule_targets(at("2026-09-07T12:00:00"))
         self.assertNotIn("live_targets", self.worker.futures)
+
+    def complete_targets(self, now):
+        result = self.worker.futures["live_targets"].result(timeout=5)
+        self.worker.collect(now)
+        return result
+
+    def test_new_quote_wakes_targets_and_inflight_change_is_not_lost(self):
+        self.worker.schedule_targets(self.now)
+        original = self.worker.futures["live_targets"]
+        original.result(timeout=5)
+        later = self.now + timedelta(seconds=1)
+        self.f.quote(later, price=".940")
+        self.worker.schedule_targets(later)
+        self.assertIs(self.worker.futures["live_targets"], original)
+        self.worker.collect(later)
+        self.worker.schedule_targets(later)
+        result = self.complete_targets(later)
+        self.assertEqual(result["rows"][0]["evaluated_quote_at"], iso(later))
+        self.assertEqual(result["rows"][0]["pa"]["action"], "exit")
+        # Re-fetching the same quote and writing housekeeping states do not wake it.
+        self.f.quote(later, price=".940")
+        with self.f.db.transaction() as conn:
+            set_state(conn, "worker_heartbeat", {"at": iso(later)})
+            set_state(conn, "intraday_execution", {"at": iso(later)})
+        self.worker.schedule_targets(later + timedelta(seconds=1))
+        self.assertNotIn("live_targets", self.worker.futures)
+
+    def test_minute_data_and_order_outcomes_wake_targets_without_new_quote(self):
+        self.worker.schedule_targets(self.now)
+        self.complete_targets(self.now)
+        later = self.now + timedelta(seconds=1)
+        self.worker.ingest("minute5:sh510300", {
+            "symbol": "sh510300", "as_of": self.now.date().isoformat(),
+            "fetched_at": iso(later), "source": "test", "bars": [],
+        }, later)
+        self.worker.schedule_targets(later)
+        self.complete_targets(later)
+        self.f.order(when=later, kind="intraday")
+        self.worker.schedule_targets(later)
+        self.complete_targets(later)
+        with self.f.db.transaction() as conn:
+            conn.execute("UPDATE orders SET status='cancelled'")
+        self.worker.schedule_targets(later + timedelta(seconds=1))
+        self.complete_targets(later + timedelta(seconds=1))
+        self.worker.schedule_targets(later + timedelta(seconds=2))
+        self.assertNotIn("live_targets", self.worker.futures)
+
+    def test_failed_calculation_retries_after_short_backoff_and_fallback_still_refreshes(self):
+        failed = Future()
+        failed.set_exception(ValueError("test calculation failed"))
+        with patch.object(self.worker.target_pool, "submit", return_value=failed):
+            self.worker.schedule_targets(self.now)
+        self.worker.collect(self.now)
+        self.worker.schedule_targets(self.now)
+        self.assertNotIn("live_targets", self.worker.futures)
+        self.worker.target_retry_at = time.monotonic() - 1
+        self.worker.schedule_targets(self.now)
+        self.complete_targets(self.now)
+        self.worker.last_targets -= 61
+        self.worker.schedule_targets(self.now + timedelta(seconds=61))
+        self.complete_targets(self.now + timedelta(seconds=61))
+
+    def test_arrivals_do_not_wait_for_five_second_readiness_timer(self):
+        self.worker.last_ready = self.worker.last_schedule = time.monotonic()
+        with (patch.object(self.worker, "schedule_targets") as targets,
+              patch.object(self.worker.intraday, "tick") as trader,
+              patch.object(self.worker.notifications, "tick")):
+            self.worker.tick(self.now, network=True)
+        targets.assert_called_once_with(self.now)
+        trader.assert_called_once_with(self.now)
 
     def test_api_labels_freshness_and_never_returns_previous_config_or_day_as_current(self):
         result = calculate_targets(self.f.db, "2026-09-04", self.now)

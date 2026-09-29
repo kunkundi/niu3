@@ -112,7 +112,7 @@ CONFIG_LABELS = {
     "pa_rr_enabled": "盈亏比过滤",
     "pa_min_rr": "裸 K 最低潜在盈亏比",
     "intraday_confirmations": "目标连续确认次数",
-    "intraday_min_interval": "同一 ETF 最短操作间隔（秒）",
+    "intraday_min_interval": "同一 ETF 实际成交后冷却（秒）",
     "intraday_max_orders": "每只 ETF 每日最多订单数",
     "intraday_order_ttl": "盘中未成交订单有效期（秒）",
     "intraday_t_enabled": "底仓做 T",

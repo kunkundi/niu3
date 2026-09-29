@@ -214,13 +214,14 @@ class Worker:
         self.provider = provider or PublicProvider()
         self.engine = Engine(db, self.calendar)
         self.intraday = IntradayTrader(self.engine)
-        self.last_intraday = 0
         self.notifications = NotificationDispatcher(db)
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="market-data")
         self.target_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-targets")
         self.minute_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="minute-bars")
         self.last_targets = 0
         self.target_version = None
+        self.source_revision = 0
+        self.target_retry_at = 0
         self.futures = {}
         self.attempts = {}
         self.owner = uuid.uuid4().hex
@@ -272,6 +273,9 @@ class Worker:
                         raise DataError("history latest completed date missing")
                 self.ingest(key, result, now)
             except Exception as exc:
+                if key == "live_targets":
+                    self.target_version = None
+                    self.target_retry_at = time.monotonic() + 5
                 if key.startswith("history:") and isinstance(exc, SourceCooling):
                     self.history_cooldown_until = exc.until
                     with self.db.transaction() as conn:
@@ -430,6 +434,8 @@ class Worker:
                 ingest_actions(conn, result)
                 set_state(conn, key, {"at": iso(now)})
             conn.execute("DELETE FROM state WHERE key=?", (f"error:{key}",))
+        if key.startswith(("minute5:", "history:", "metrics:", "profile:", "actions:")):
+            self.source_revision += 1
         if key in {"market", "fallback"}:
             self.db.log(key, "ok", f"更新 {len(result)} 条", now)
 
@@ -689,12 +695,29 @@ class Worker:
     def schedule_targets(self, now):
         if not self.calendar.session(now) or "live_targets" in self.futures:
             return
+        if time.monotonic() < self.target_retry_at:
+            return
         as_of = history_target(self.calendar, now)
         if not as_of:
             return
         with self.db.connect() as conn:
+            conn.execute("BEGIN")
             config_id, config = settings(conn)
-        version = (as_of, config_id)
+            # Evidence changes wake the strategy; repeated polling/heartbeats do not.
+            # Capture BEFORE dispatch so changes during a calculation cause a follow-up.
+            latest = tuple(conn.execute(
+                "SELECT (SELECT MAX(id) FROM quotes),(SELECT MAX(id) FROM fills),"
+                "(SELECT MAX(id) FROM position_ledger),(SELECT MAX(id) FROM cash_ledger)"
+            ).fetchone())
+            orders = tuple(tuple(r) for r in conn.execute(
+                "SELECT id,status,filled FROM orders WHERE substr(created_at,1,10)=? "
+                "OR status IN ('pending','partial') ORDER BY id", (now.date().isoformat(),),
+            ))
+            risk = tuple(tuple(r) for r in conn.execute("SELECT * FROM risk_intents ORDER BY symbol"))
+            cooldown = tuple(r[0] for r in conn.execute(
+                "SELECT symbol FROM cooldown WHERE day=? ORDER BY symbol", (now.date().isoformat(),),
+            ))
+        version = (as_of, config_id, self.source_revision, latest, orders, risk, cooldown)
         if version == self.target_version and time.monotonic() - self.last_targets < config.market_interval:
             return
         self.futures["live_targets"] = self.target_pool.submit(calculate_targets, self.db, as_of, now)
@@ -744,15 +767,16 @@ class Worker:
             self.last_ready = time.monotonic()
             self.plan(now)
             if network:
-                self.schedule_targets(now)
                 self.schedule_reviews(now)
         with self.db.transaction() as conn:
             apply_actions(conn, now)
         self.engine.expire(now)
         self.engine.risk_check(now)
-        if time.monotonic() - self.last_intraday >= 5 or not network:
-            self.intraday.tick(now)
-            self.last_intraday = time.monotonic()
+        if network:
+            self.schedule_targets(now)
+        # New signals, order outcomes and price changes are evaluated on arrival.
+        # The loop is a health/timer check, never an instruction to place an order.
+        self.intraday.tick(now)
         self.engine.match(now)
         try:
             self.notifications.tick(now, deliver=network)

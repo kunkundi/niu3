@@ -1,3 +1,4 @@
+import json
 import unittest
 from dataclasses import replace
 from datetime import timedelta
@@ -8,12 +9,14 @@ from app.automation.service import Worker
 from app.automation.targets import calculate_targets
 from app.core.config import Settings
 from app.core.types import iso
-from app.storage.db import get_state, latest_quote, set_state, settings
+from app.storage.db import Database, dump, get_state, latest_quote, set_state, settings
 from app.strategies.focus import FOCUS_POLICY
 from app.strategies.price_action import STRATEGY, build_plan, price_decision, trigger_problem, select_targets
 from app.trading.account import reconcile
 from app.trading.actions import adjust_pa_reference
 from app.trading.intraday import IntradayTrader, live_problem
+from app.trading.engine import Engine
+from app.trading.entry_retry import PRICE_CANCEL, INVALIDATED
 from tests.helpers import Fixture, at, bars, candles
 
 
@@ -244,6 +247,223 @@ class PriceActionTests(unittest.TestCase):
         self.assertEqual(self.f.rows("orders")[0]["status"], "partial")
         self.fill(self.now + timedelta(seconds=60), volume=5000000)
         self.confirmed(self.now + timedelta(minutes=10))
+        self.assertEqual(len(self.f.rows("orders")), 1)
+
+    def cancel_unfilled_entry(self):
+        self.confirmed()
+        when = self.now + timedelta(minutes=1)
+        self.signal(when, action="hold", selected=False, price="1.050")
+        self.trader.tick(when)
+        order = self.f.rows("orders")[-1]
+        self.assertEqual((order["status"], order["filled"], order["blocked_reason"]),
+                         ("cancelled", 0, PRICE_CANCEL))
+        return when
+
+    def test_unfilled_entry_retries_after_new_confirmation_without_fixed_wait_then_fills_once(self):
+        cancelled = self.cancel_unfilled_entry()
+        original_order = self.f.rows("orders")[0]
+        original_decision = self.f.rows("intraday_decisions")[0]
+        # Two fresh confirmations can restore a zero-fill intent before five minutes.
+        retry_at = cancelled + timedelta(minutes=2)
+        self.confirmed(retry_at)
+        orders = self.f.rows("orders")
+        self.assertEqual(len(orders), 2)
+        self.assertEqual(orders[0], original_order)
+        self.assertEqual(self.f.rows("intraday_decisions")[0], original_decision)
+        evidence = json.loads(self.f.rows("intraday_decisions")[1]["payload"])
+        self.assertEqual(evidence["entry_attempt"]["previous_order_id"], orders[0]["id"])
+        self.assertEqual(evidence["entry_attempt"]["attempt"], 2)
+        self.assertEqual(evidence["entry_attempt"]["intent_key"], orders[0]["key"])
+        self.assertNotEqual(orders[0]["key"], orders[1]["key"])
+        # A process restart and repeated same-quote ticks cannot duplicate attempts.
+        restarted = Database(self.f.db.path)
+        IntradayTrader(Engine(restarted, self.f.calendar)).tick(retry_at + timedelta(seconds=1))
+        self.assertEqual(len(self.f.rows("orders")), 2)
+        self.fill(retry_at + timedelta(seconds=30))
+        self.assertGreater(self.f.rows("orders")[1]["filled"], 0)
+        self.assertTrue(all(f["order_id"] == orders[1]["id"] for f in self.f.rows("fills")))
+        self.confirmed(retry_at + timedelta(minutes=6))
+        self.assertEqual(len(self.f.rows("orders")), 2)
+
+    def test_timeout_requires_confirmations_strictly_after_expiration(self):
+        self.confirmed()
+        expired = self.now + timedelta(minutes=5)
+        self.signal(expired)
+        self.f.engine.expire(expired)
+        self.trader.tick(expired)
+        with self.f.db.connect() as conn:
+            self.assertEqual(get_state(conn, "intraday_confirmation")["symbols"]["sh510300"]["count"], 0)
+        retry = expired + timedelta(seconds=30)
+        self.signal(retry)
+        self.trader.tick(retry)
+        self.trader.tick(retry + timedelta(seconds=10))
+        self.assertEqual(len(self.f.rows("orders")), 1)
+        self.signal(retry + timedelta(minutes=1))
+        self.trader.tick(retry + timedelta(minutes=1))
+        self.assertEqual(len(self.f.rows("orders")), 2)
+        self.assertEqual(self.f.rows("orders")[0]["status"], "expired")
+
+    def test_cooldown_starts_at_last_actual_fill_and_cancel_does_not_extend_it(self):
+        self.confirmed()
+        filled_at = self.now + timedelta(seconds=30)
+        self.fill(filled_at, volume=1_010_000)  # A real partial fill also starts cooling.
+        order = self.f.rows("orders")[0]
+        self.assertGreater(order["filled"], 0)
+        self.assertLess(order["filled"], order["quantity"])
+        cancel_at = filled_at + timedelta(minutes=4)
+        with self.f.db.transaction() as conn:
+            self.trader._cancel(conn, order["id"], cancel_at, "测试撤销余单")
+            _, config = settings(conn)
+            self.assertIn("还需 60 秒", self.trader._limit(conn, "sh510300", config, cancel_at))
+            self.assertEqual(self.trader._limit(conn, "sh510300", config,
+                                               filled_at + timedelta(minutes=5)), "")
+
+    def test_new_quote_waits_for_its_own_evaluation_before_new_order(self):
+        self.signal(self.now)
+        self.trader.tick(self.now)
+        later = self.now + timedelta(seconds=30)
+        self.signal(later)
+        self.f.quote(later + timedelta(seconds=1), price="1.050")
+        self.trader.tick(later + timedelta(seconds=1))
+        self.assertEqual(self.f.rows("orders"), [])
+        with self.f.db.connect() as conn:
+            self.assertIn("新行情已到", str(get_state(conn, "intraday_execution")))
+        # The latest observation removes the buy condition; a timer cannot restore it.
+        self.signal(later + timedelta(seconds=2), action="hold", selected=False, price="1.050")
+        self.trader.tick(later + timedelta(seconds=2))
+        self.trader.tick(later + timedelta(minutes=5))
+        self.assertEqual(self.f.rows("orders"), [])
+
+    def test_structure_exit_bypasses_recent_fill_cooldown(self):
+        with self.f.db.transaction() as conn:
+            from app.storage.db import put_instrument
+
+            put_instrument(conn, replace(self.f.instrument, settlement=0))
+        self.confirmed()
+        self.fill(self.now + timedelta(seconds=30))
+        later = self.now + timedelta(seconds=45)
+        self.signal(later, action="exit", selected=False, price=".940")
+        self.f.engine.risk_check(later)
+        self.assertTrue(any(o["side"] == "SELL" and o["kind"] == "risk" for o in self.f.rows("orders")))
+
+    def test_same_timestamp_other_source_requires_its_own_evaluation(self):
+        self.signal(self.now)
+        self.trader.tick(self.now)
+        later = self.now + timedelta(seconds=30)
+        plan = self.signal(later)
+        with self.f.db.transaction() as conn:
+            plan["rows"][0]["evaluated_quote_id"] = latest_quote(conn, "sh510300")[0]
+            set_state(conn, "live_targets", plan)
+        self.f.quote(later, price="1.050", source="other")
+        self.trader.tick(later)
+        self.assertEqual(self.f.rows("orders"), [])
+
+    def test_brief_price_excursion_resets_confirmation_even_while_recalculation_is_pending(self):
+        self.signal(self.now)
+        self.trader.tick(self.now)
+        # No new target plan yet: observe the out-of-range quote directly.
+        self.f.quote(self.now + timedelta(seconds=10), price="1.050")
+        self.trader.tick(self.now + timedelta(seconds=10))
+        with self.f.db.connect() as conn:
+            self.assertEqual(get_state(conn, "intraday_confirmation")["symbols"]["sh510300"]["count"], 0)
+        self.signal(self.now + timedelta(seconds=20))
+        self.trader.tick(self.now + timedelta(seconds=20))
+        self.assertEqual(self.f.rows("orders"), [])
+        self.signal(self.now + timedelta(seconds=30))
+        self.trader.tick(self.now + timedelta(seconds=30))
+        self.assertEqual(len(self.f.rows("orders")), 1)
+
+    def test_retry_attempts_share_the_existing_daily_order_budget(self):
+        self.f.db.change_config({"intraday_max_orders": 2}, self.now - timedelta(minutes=2))
+        cancelled = self.cancel_unfilled_entry()
+        retry = cancelled + timedelta(minutes=5)
+        self.confirmed(retry)
+        self.assertEqual(len(self.f.rows("orders")), 2)
+        end = retry + timedelta(minutes=1)
+        self.signal(end, action="hold", selected=False, price="1.050")
+        self.trader.tick(end)
+        self.confirmed(end + timedelta(minutes=5))
+        self.assertEqual(len(self.f.rows("orders")), 2)
+        with self.f.db.connect() as conn:
+            self.assertIn("达到本日订单上限", str(get_state(conn, "intraday_execution")))
+
+    def test_retry_checks_executable_ask_before_creating_an_attempt(self):
+        cancelled = self.cancel_unfilled_entry()
+        retry = cancelled + timedelta(minutes=5)
+        for when in (retry - timedelta(minutes=1), retry):
+            # Last trade enters the range, but the executable ask is outside it.
+            self.f.quote(when, price="1.000", ask=1050000)
+            self.signal(when)
+            self.trader.tick(when)
+        self.assertEqual(len(self.f.rows("orders")), 1)
+        self.signal(retry + timedelta(minutes=1))
+        self.trader.tick(retry + timedelta(minutes=1))
+        self.assertEqual(len(self.f.rows("orders")), 2)
+
+    def test_flat_account_remembers_invalidation_after_price_cancel_across_restart(self):
+        cancelled = self.cancel_unfilled_entry()
+        broken = cancelled + timedelta(minutes=1)
+        # Entry stop is .950; the daily structural/exit levels are lower. Even
+        # a hold action with no selected target must invalidate this old entry.
+        self.signal(broken, action="hold", selected=False, price=".945")
+        self.trader.tick(broken)
+        with self.f.db.connect() as conn:
+            blocks = get_state(conn, "entry_retry_blocks")["intents"]
+            self.assertIn(self.f.rows("orders")[0]["key"], blocks)
+        restarted = Database(self.f.db.path)
+        self.trader = IntradayTrader(Engine(restarted, self.f.calendar))
+        self.confirmed(broken + timedelta(minutes=6))
+        self.assertEqual(len(self.f.rows("orders")), 1)
+        self.assertEqual(self.f.rows("orders")[0]["blocked_reason"], PRICE_CANCEL)
+
+    def test_entry_stop_cancels_pending_unfilled_entry_without_waiting_for_a_position(self):
+        self.confirmed()
+        broken = self.now + timedelta(minutes=1)
+        self.signal(broken, action="hold", selected=False, price=".945")
+        self.trader.tick(broken)
+        self.assertEqual(self.f.rows("orders")[0]["blocked_reason"], INVALIDATED)
+        self.confirmed(broken + timedelta(minutes=6))
+        self.assertEqual(len(self.f.rows("orders")), 1)
+
+    def test_partial_entry_cancellation_does_not_create_another_full_entry(self):
+        self.confirmed()
+        self.fill(self.now + timedelta(seconds=30), volume=1010000)
+        self.assertEqual(self.f.rows("orders")[0]["filled"], 100)
+        cancelled = self.now + timedelta(minutes=1)
+        self.signal(cancelled, action="hold", selected=False, price="1.050")
+        self.trader.tick(cancelled)
+        self.assertNotEqual(self.f.rows("orders")[0]["blocked_reason"], PRICE_CANCEL)
+        self.confirmed(cancelled + timedelta(minutes=6))
+        self.assertEqual(len(self.f.rows("orders")), 1)
+        self.assertEqual(sum(r["quantity"] for r in self.f.rows("lots")), 100)
+
+    def test_risk_cancel_is_not_retried_even_if_risk_record_is_later_cleared(self):
+        self.confirmed()
+        cancelled = self.now + timedelta(minutes=1)
+        with self.f.db.transaction() as conn:
+            conn.execute("INSERT INTO risk_intents VALUES(?,?,?)", ("sh510300", "结构失效", iso(cancelled)))
+        self.signal(cancelled)
+        self.trader.tick(cancelled)
+        self.assertEqual(self.f.rows("orders")[0]["status"], "cancelled")
+        with self.f.db.transaction() as conn:
+            conn.execute("DELETE FROM risk_intents")
+        self.confirmed(cancelled + timedelta(minutes=6))
+        self.assertEqual(len(self.f.rows("orders")), 1)
+
+    def test_changed_structure_cannot_reuse_the_cancelled_entry_intent(self):
+        cancelled = self.cancel_unfilled_entry()
+        self.confirmed(cancelled + timedelta(minutes=6), input_sha256="revised-history")
+        self.assertEqual(len(self.f.rows("orders")), 1)
+
+    def test_upgrade_does_not_rearm_historical_expired_entries(self):
+        self.confirmed()
+        with self.f.db.transaction() as conn:
+            row = conn.execute("SELECT * FROM intraday_decisions").fetchone()
+            evidence = json.loads(row["payload"])
+            evidence.pop("entry_attempt")
+            conn.execute("UPDATE intraday_decisions SET payload=? WHERE order_id=?", (dump(evidence), row["order_id"]))
+        self.f.engine.expire(self.now + timedelta(minutes=5))
+        self.confirmed(self.now + timedelta(minutes=11))
         self.assertEqual(len(self.f.rows("orders")), 1)
 
     def test_structure_exit_persists_through_t_plus_one_without_percentage_stop(self):

@@ -25,7 +25,7 @@ def calculate_targets(db, as_of, now):
                 histories.setdefault(row["symbol"], []).append(Bar(**json.loads(row["payload"])))
         held = {row[0] for row in conn.execute("SELECT DISTINCT symbol FROM lots WHERE quantity>0")}
         cooldown = cooling_symbols(conn, now.date().isoformat(), config)
-        prices, quote_times, factors, quotes = {}, {}, {}, {}
+        prices, quote_times, quote_ids, factors, quotes = {}, {}, {}, {}, {}
         for symbol in universe:
             history = histories.get(symbol, [])
             latest = latest_quote(conn, symbol)
@@ -39,11 +39,13 @@ def calculate_targets(db, as_of, now):
             ):
                 prices[symbol] = dec(history[-1].close) * quote.last / quote.previous_close
                 quote_times[symbol] = quote.at
+                quote_ids[symbol] = latest[0]
                 factors[symbol] = dec(quote.previous_close) / 1_000_000 / dec(history[-1].close)
                 quotes[symbol] = quote
     plan = build_plan(list(universe.values()), histories, held, as_of, "", config, cooldown, prices)
     for row in plan["rows"]:
         row["evaluated_quote_at"] = quote_times.get(row["symbol"])
+        row["evaluated_quote_id"] = quote_ids.get(row["symbol"])
         if row.get("pa", {}).get("ready") and row["symbol"] in factors:
             from app.strategies.price_action import raw_levels
 
@@ -87,5 +89,5 @@ def calculate_targets(db, as_of, now):
         "representative_count": len(representatives),
         "missing_quotes": missing,
         "refresh_seconds": config.market_interval,
-        "message": "盘中目标自动重算，连续确认后按盘中交易规则执行。",
+        "message": "行情与交易状态变化时重新判断，连续确认后执行；没有有效条件时继续等待。",
     }

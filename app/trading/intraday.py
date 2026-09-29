@@ -2,19 +2,27 @@
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import time
 from decimal import Decimal
+from math import ceil
 
 from app.core.types import dec, dt, iso
 from app.storage.db import dump, get_state, instruments, latest_quote, set_state, settings
 from app.strategies.focus import FOCUS_POLICY
-from app.strategies.price_action import STRATEGY
+from app.strategies.price_action import STRATEGY, trigger_problem
 from app.strategies.profit import cooling_symbols, reentry_problem, PROFIT_REASONS
 from app.strategies.minute_t import enabled as minute_t_enabled, signal as minute_t_signal, execution_problem
 from app.trading.account import reconcile, snapshot
+from app.trading.entry_retry import observe_entries, next_attempt, price_cancellation, PRICE_CANCEL
 
 KINDS = "('intraday','t_sell','t_buy')"
 OPEN = "('pending','partial')"
+
+
+def evaluated_quote(row, latest):
+    return bool(latest and row.get("evaluated_quote_at") == latest[1].at
+                and row.get("evaluated_quote_id", latest[0]) == latest[0])
 
 
 def live_problem(plan, config_id, config, calendar, now):
@@ -60,13 +68,14 @@ def target_quantity(plan, account, symbol, quote, instrument, config):
     )
 
 
-def confirm_price_action(plan, previous, config_id, config, now):
+def confirm_price_action(plan, previous, config_id, config, now, after=None):
     """Confirm each ETF on distinct fresh observations, independently of peers."""
     result = {}
     for row in plan["rows"]:
         symbol, pa = row["symbol"], row.get("pa", {})
         quote_at = row.get("evaluated_quote_at")
         old = previous.get(symbol, {})
+        cutoff = (after or {}).get(symbol)
         fingerprint = hashlib.sha256(dump({
             "config": config_id,
             "strategy": STRATEGY,
@@ -78,10 +87,12 @@ def confirm_price_action(plan, previous, config_id, config, now):
         valid = (
             pa.get("ready") and quote_at
             and 0 <= (now - dt(quote_at)).total_seconds() <= config.quote_max_age
+            and (not cutoff or dt(quote_at) > dt(cutoff))
         )
         consecutive = (
             valid and old.get("fingerprint") == fingerprint and old.get("observed_at")
             and old.get("quote_at") and dt(quote_at) >= dt(old["quote_at"])
+            and (not cutoff or dt(old["quote_at"]) > dt(cutoff))
             and 0 <= (dt(plan["created_at"]) - dt(old["observed_at"])).total_seconds()
             <= config.market_interval + 30
         )
@@ -186,14 +197,21 @@ class IntradayTrader:
         minute_t=None,
     ):
         key = f"{kind}:{plan['id']}:{instrument.symbol}:{side}"
+        entry_attempt = None
         pa = next((r.get("pa", {}) for r in plan["rows"] if r["symbol"] == instrument.symbol), {})
         if kind == "intraday":
-            # One intent per completed setup/day; refreshed quotes cannot pyramid the same setup.
+            # One entry intent per setup/day, with distinct audited attempts only
+            # while completely unfilled. Re-entry after profit keeps its own policy.
             key = f"{kind}:pa:{config_id}:{now.date()}:{pa.get('signal_day') if side == 'BUY' else pa.get('exit_day')}:{instrument.symbol}:{side}"
             if side == "BUY" and pa.get("reentry"):
                 # One re-entry intent per actual profit sale, even across config changes.
                 key = f"intraday:reentry:{instrument.symbol}:{pa['reentry']['sale']['order_id']}"
                 quantity = min(quantity, pa["reentry"]["sale"]["quantity"])
+            elif side == "BUY":
+                attempt = next_attempt(conn, key, pa, quote, instrument, config, now)
+                if attempt is None:
+                    return None
+                key, entry_attempt = attempt
         if minute_t:
             # One intent per closed candle and side, including after restart/expiry.
             key = f"{kind}:minute5:{config_id}:{instrument.symbol}:{minute_t['bar_at']}"
@@ -217,6 +235,7 @@ class IntradayTrader:
                         "reason": reason,
                         "pa": pa,
                         "minute_t": minute_t,
+                        **({"entry_attempt": entry_attempt} if entry_attempt else {}),
                     }
                 ),
             ),
@@ -229,18 +248,24 @@ class IntradayTrader:
 
     def _limit(self, conn, symbol, config, now):
         rows = conn.execute(
-            f"SELECT created_at,updated_at FROM orders WHERE symbol=? AND (kind IN {KINDS} "
+            f"SELECT id FROM orders WHERE symbol=? AND (kind IN {KINDS} "
             "OR reason IN (?,?)) AND (substr(created_at,1,10)=? OR id IN "
             "(SELECT order_id FROM fills WHERE symbol=? AND substr(at,1,10)=?)) ORDER BY updated_at DESC,id DESC",
             (symbol, *PROFIT_REASONS, now.date().isoformat(), symbol, now.date().isoformat()),
         ).fetchall()
         if len(rows) >= config.intraday_max_orders:
             return "达到本日订单上限"
-        if rows and (now - dt(rows[0]["updated_at"])).total_seconds() < config.intraday_min_interval:
-            return "等待最短操作间隔"
+        last_fill = conn.execute(
+            "SELECT at FROM fills WHERE symbol=? ORDER BY at DESC,id DESC LIMIT 1", (symbol,),
+        ).fetchone()
+        if last_fill:
+            remaining = config.intraday_min_interval - (now - dt(last_fill["at"])).total_seconds()
+            if remaining > 0:
+                return f"实际成交后冷却中，还需 {ceil(remaining)} 秒；届时重新核验条件"
         return ""
 
-    def _cycle(self, conn, cycle, plan, account, instrument, quote, current, desired, now, config_id, config):
+    def _cycle(self, conn, cycle, plan, account, instrument, quote, current, desired, now, config_id, config,
+               evaluated=True, confirmed=True):
         sell = conn.execute("SELECT * FROM orders WHERE id=?", (cycle["sell_order_id"],)).fetchone()
         buy = (
             conn.execute("SELECT * FROM orders WHERE id=?", (cycle["buy_order_id"],)).fetchone()
@@ -257,7 +282,7 @@ class IntradayTrader:
             cycle["day"] != now.date().isoformat()
             or cycle["config_id"] != config_id
             or not config.intraday_t_enabled
-            or instrument.symbol not in plan["targets"]
+            or (evaluated and instrument.symbol not in plan["targets"])
         ):
             status = "abandoned"
             self._cancel(conn, sell["id"], now, "做 T 条件已失效")
@@ -291,7 +316,11 @@ class IntradayTrader:
             limit = self._limit(conn, instrument.symbol, config, now)
             if minute_t:
                 message = minute_t["message"]
-            if quantity <= 0:
+            if not evaluated:
+                message = "新行情已到，等待策略重新判断"
+            elif not confirmed:
+                message = "等待目标连续确认"
+            elif quantity <= 0:
                 status = "abandoned"
                 message = "本轮买回数量受目标仓位限制，轮次结束"
             elif minute_t and minute_t.get("invalidated"):
@@ -373,10 +402,29 @@ class IntradayTrader:
                 )
                 return
             previous_symbols = get_state(conn, "intraday_confirmation", {}).get("symbols", {})
+            retry_cutoffs = observe_entries(conn, plan, config_id, config, now)
             confirmation = {"signal_id": plan["id"]}
             confirmation["symbols"] = confirm_price_action(
-                plan, previous_symbols, config_id, config, now
+                plan, previous_symbols, config_id, config, now, after=retry_cutoffs
             )
+            observations = {r["symbol"]: latest_quote(conn, r["symbol"]) for r in plan["rows"]}
+            for row in plan["rows"]:
+                symbol, pa = row["symbol"], row.get("pa", {})
+                latest = observations[symbol]
+                if evaluated_quote(row, latest):
+                    continue
+                # An in-flight older calculation is not another confirmation.
+                # Observe adverse quotes even if a rebound arrives before recomputation.
+                previous = previous_symbols.get(symbol, {})
+                observed = {**confirmation["symbols"][symbol], **previous, "count": previous.get("count", 0)}
+                quote = latest[1] if latest else None
+                if (not quote or not quote.fresh(now, config.quote_max_age) or quote.status != "trading"
+                        or (pa.get("action") == "buy" and (
+                            trigger_problem(pa, quote, config, "intraday", "BUY")
+                            or trigger_problem(pa, replace(quote, ask=quote.last), config, "intraday", "BUY")
+                        ))):
+                    observed["count"] = 0
+                confirmation["symbols"][symbol] = observed
             confirmation["count"] = min(
                 (v["count"] for s, v in confirmation["symbols"].items() if s in plan["targets"]),
                 default=0,
@@ -414,6 +462,7 @@ class IntradayTrader:
                 delta = desired - current
                 row = rows.get(symbol)
                 pa = (row or {}).get("pa", {})
+                evaluated = evaluated_quote(row or {}, latest)
                 symbol_confirmation = confirmation["symbols"].get(symbol, {"count": 0})
                 confirmed = symbol_confirmation["count"] >= config.intraday_confirmations
                 if current and symbol not in active_cycles:
@@ -441,11 +490,14 @@ class IntradayTrader:
                     intent_changed = pa.get("action") != ("buy" if order["side"] == "BUY" else "exit")
                     obsolete = (
                         risk
-                        or (order["kind"] == "intraday" and intent_changed)
-                        or (order["kind"] in {"t_sell", "t_buy"} and symbol not in plan["targets"])
+                        or (evaluated and order["kind"] == "intraday" and intent_changed)
+                        or (evaluated and order["kind"] in {"t_sell", "t_buy"} and symbol not in plan["targets"])
                     )
                     if obsolete:
-                        self._cancel(conn, order["id"], now, symbol_reason or "实时目标已改变，取消剩余订单")
+                        reason = symbol_reason or "实时目标已改变，取消剩余订单"
+                        if not symbol_reason and price_cancellation(conn, order, pa, quote, config):
+                            reason = PRICE_CANCEL
+                        self._cancel(conn, order["id"], now, reason)
                 if risk and symbol in active_cycles:
                     conn.execute(
                         "UPDATE t_cycles SET status='abandoned',updated_at=? WHERE id=?",
@@ -454,13 +506,8 @@ class IntradayTrader:
                 if symbol_reason:
                     items.append({"symbol": symbol, "message": symbol_reason})
                     continue
-                if not confirmed:
-                    items.append(
-                        {
-                            "symbol": symbol,
-                            "message": f"等待目标确认 {symbol_confirmation['count']}/{config.intraday_confirmations}",
-                        }
-                    )
+                if not evaluated and symbol not in active_cycles:
+                    items.append({"symbol": symbol, "message": "新行情已到，等待策略重新判断"})
                     continue
                 if symbol in active_cycles:
                     message = self._cycle(
@@ -475,8 +522,18 @@ class IntradayTrader:
                         now,
                         config_id,
                         config,
+                        evaluated=evaluated,
+                        confirmed=confirmed,
                     )
                     items.append({"symbol": symbol, "message": message})
+                    continue
+                if not confirmed:
+                    items.append(
+                        {
+                            "symbol": symbol,
+                            "message": f"等待目标确认 {symbol_confirmation['count']}/{config.intraday_confirmations}",
+                        }
+                    )
                     continue
                 if conn.execute(
                     f"SELECT 1 FROM orders WHERE symbol=? AND status IN {OPEN}", (symbol,)
@@ -516,7 +573,7 @@ class IntradayTrader:
                                 "symbol": symbol,
                                 "message": f"已提交盘中{'买入' if side == 'BUY' else '卖出'} {quantity} 份"
                                 if order_id
-                                else "当前形态已有执行记录，等待新形态",
+                                else "当前形态已有执行记录，尚不满足重试条件",
                             }
                         )
                     else:
@@ -593,9 +650,9 @@ class IntradayTrader:
                 {
                     "at": iso(now),
                     "state": "running",
-                    "message": "裸 K 自动交易运行中：日线管理底仓，5 分钟 K 确认做 T"
+                    "message": "按行情变化判断：日线管理底仓，完整 5 分钟 K 确认做 T；条件不足时等待"
                     if minute_t_enabled(config) and config.intraday_t_enabled
-                    else "裸 K 自动交易运行中：完整日 K 定位，盘中触发买卖与做 T",
+                    else "按行情变化判断：完整日 K 定位，盘中确认买卖与做 T；条件不足时等待",
                     "confirmations": min(confirmation["count"], config.intraday_confirmations),
                     "items": items,
                 },

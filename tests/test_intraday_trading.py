@@ -47,7 +47,7 @@ class IntradayTradingTests(unittest.TestCase):
                                "exit_day": "2026-09-04", "t_allowed": True,
                                "raw": {"entry": 995000, "entry_stop": 950000, "target": 1100000,
                                        "entry_ceiling": 1040000, "structural_stop": 940000,
-                                       "exit": 1005000, "support": 1000000,
+                                       "exit": 930000 if selected else 1005000, "support": 1000000,
                                        "resistance": 1020000, "t_stop": 980000}},
                         "evaluated_quote_at": iso(when),
                         "focus_status": "representative",
